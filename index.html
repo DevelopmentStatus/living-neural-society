@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Living Neural Society Simulation - A sophisticated framework for emergent storytelling through neural agent interactions" />
+  <meta name="keywords" content="simulation, neural networks, AI, society, evolution, emergent storytelling" />
+  <meta name="author" content="Living Neural Society Team" />
+  
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  
+  <!-- Open Graph Meta Tags -->
+  <meta property="og:title" content="Living Neural Society Simulation" />
+  <meta property="og:description" content="A sophisticated framework for emergent storytelling through neural agent interactions" />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://living-neural-society.com" />
+  <meta property="og:image" content="/og-image.png" />
+  
+  <!-- Twitter Card Meta Tags -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Living Neural Society Simulation" />
+  <meta name="twitter:description" content="A sophisticated framework for emergent storytelling through neural agent interactions" />
+  <meta name="twitter:image" content="/og-image.png" />
+  
+  <!-- Preload Critical Resources -->
+  <link rel="preload" href="/src/main.tsx" as="script" />
+  <link rel="preload" href="/src/styles/main.css" as="style" />
+  
+  <!-- Theme Color -->
+  <meta name="theme-color" content="#1a1a2e" />
+  
+  <title>Living Neural Society Simulation</title>
+  
+  <!-- Critical CSS -->
+  <style>
+    /* Critical CSS for initial render */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
+      color: #ffffff;
+      overflow: hidden;
+      height: 100vh;
+    }
+    
+    #root {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .loading-screen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 9999;
+      transition: opacity 0.5s ease-out;
+    }
+    
+    .loading-screen.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    
+    .loading-logo {
+      font-size: 2.5rem;
+      font-weight: 700;
+      background: linear-gradient(45deg, #4facfe 0%, #00f2fe 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 1rem;
+    }
+    
+    .loading-subtitle {
+      font-size: 1.1rem;
+      color: #a0a0a0;
+      margin-bottom: 2rem;
+      text-align: center;
+    }
+    
+    .loading-spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid rgba(255, 255, 255, 0.1);
+      border-top: 3px solid #4facfe;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    .loading-progress {
+      width: 300px;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 2px;
+      margin-top: 1rem;
+      overflow: hidden;
+    }
+    
+    .loading-progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
+      border-radius: 2px;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+    
+    .loading-status {
+      margin-top: 0.5rem;
+      font-size: 0.9rem;
+      color: #808080;
+    }
+  </style>
+</head>
+<body>
+  <!-- Loading Screen -->
+  <div id="loading-screen" class="loading-screen">
+    <div class="loading-logo">🧠 Living Neural Society</div>
+    <div class="loading-subtitle">Initializing emergent storytelling framework...</div>
+    <div class="loading-spinner"></div>
+    <div class="loading-progress">
+      <div class="loading-progress-bar" id="progress-bar"></div>
+    </div>
+    <div class="loading-status" id="loading-status">Loading core systems...</div>
+  </div>
+
+  <!-- Main Application Root -->
+  <div id="root"></div>
+
+  <!-- Scripts -->
+  <script type="module" src="/src/main.tsx"></script>
+  
+  <!-- Loading Script -->
+  <script>
+    // Loading screen management
+    const loadingScreen = document.getElementById('loading-screen');
+    const progressBar = document.getElementById('progress-bar');
+    const loadingStatus = document.getElementById('loading-status');
+    
+    const loadingSteps = [
+      'Initializing neural networks...',
+      'Loading world generation...',
+      'Setting up agent systems...',
+      'Configuring social dynamics...',
+      'Preparing civilization mechanics...',
+      'Establishing conflict systems...',
+      'Loading evolution framework...',
+      'Starting simulation engine...',
+      'Rendering world...',
+      'Ready!'
+    ];
+    
+    let currentStep = 0;
+    
+    function updateLoadingProgress(step) {
+      const progress = (step / (loadingSteps.length - 1)) * 100;
+      progressBar.style.width = `${progress}%`;
+      loadingStatus.textContent = loadingSteps[step] || 'Loading...';
+    }
+    
+    function simulateLoading() {
+      if (currentStep < loadingSteps.length) {
+        updateLoadingProgress(currentStep);
+        currentStep++;
+        setTimeout(simulateLoading, 300 + Math.random() * 200);
+      } else {
+        // Hide loading screen when app is ready
+        setTimeout(() => {
+          loadingScreen.classList.add('hidden');
+          setTimeout(() => {
+            loadingScreen.style.display = 'none';
+          }, 500);
+        }, 500);
+      }
+    }
+    
+    // Start loading simulation
+    simulateLoading();
+    
+    // Listen for app ready event
+    window.addEventListener('app-ready', () => {
+      currentStep = loadingSteps.length - 1;
+      updateLoadingProgress(currentStep);
+      setTimeout(() => {
+        loadingScreen.classList.add('hidden');
+        setTimeout(() => {
+          loadingScreen.style.display = 'none';
+        }, 500);
+      }, 500);
+    });
+    
+    // Error handling
+    window.addEventListener('error', (event) => {
+      console.error('Application error:', event.error);
+      loadingStatus.textContent = 'Error loading application. Please refresh the page.';
+      loadingStatus.style.color = '#ff6b6b';
+    });
+  </script>
+  
+  <!-- Service Worker Registration (for PWA features) -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then(registration => {
+            console.log('SW registered: ', registration);
+          })
+          .catch(registrationError => {
+            console.log('SW registration failed: ', registrationError);
+          });
+      });
+    }
+  </script>
+  
+  <!-- Performance Monitoring -->
+  <script>
+    // Basic performance monitoring
+    window.addEventListener('load', () => {
+      const loadTime = performance.now();
+      console.log(`Application loaded in ${loadTime.toFixed(2)}ms`);
+      
+      // Report to analytics if available
+      if (window.gtag) {
+        window.gtag('event', 'timing_complete', {
+          name: 'load',
+          value: Math.round(loadTime)
+        });
+      }
+    });
+  </script>
+</body>
+</html> 
