@@ -12,7 +12,7 @@
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/your-username/living-neural-society.git
+   git clone https://github.com/DevelopmentStatus/living-neural-society.git
    cd living-neural-society
    ```
 

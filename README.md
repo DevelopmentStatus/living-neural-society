@@ -127,7 +127,7 @@ A sophisticated HTML-based simulation framework designed to generate emergent na
 
 ### Installation
 ```bash
-git clone [repository-url]
+git clone https://github.com/DevelopmentStatus/living-neural-society.git
 cd living-neural-society
 npm install
 npm run dev
