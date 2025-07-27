@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { Agent, AgentStatus, Personality, Memory, Trait, Skill, Goal, SimulationState } from '../../types/simulation';
+import { Agent, AgentStatus, Personality, Memory, Trait, Skill, Goal, SimulationState, WorldTile } from '../../types/simulation';
 import { AgentAI } from './AgentAI';
 import { AgentBehavior } from './AgentBehavior';
 import { AgentMemory } from './AgentMemory';
@@ -158,6 +158,10 @@ export class AgentManager extends EventEmitter {
       agent.energy = Math.min(1.0, agent.energy + 0.01);
     } else if (decision.type === 'socialize') {
       agent.status = AgentStatus.SOCIALIZING;
+    } else if (decision.type === 'build_road') {
+      agent.status = AgentStatus.WORKING;
+      // Road building logic will be handled by the RoadManager
+      // This just sets the agent to working status
     }
   }
 
@@ -223,6 +227,72 @@ export class AgentManager extends EventEmitter {
       averageHealth: aliveAgents.length > 0 ? aliveAgents.reduce((sum, a) => sum + a.health, 0) / aliveAgents.length : 0,
       averageEnergy: aliveAgents.length > 0 ? aliveAgents.reduce((sum, a) => sum + a.energy, 0) / aliveAgents.length : 0,
     };
+  }
+
+  /**
+   * Place an agent on a specific tile
+   */
+  public placeAgentOnTile(agent: Agent, tile: WorldTile): boolean {
+    // Remove agent from current tile if any
+    this.removeAgentFromCurrentTile(agent);
+
+    // Add agent to new tile
+    if (!tile.agents.includes(agent.id)) {
+      tile.agents.push(agent.id);
+    }
+
+    // Update agent position to tile center
+    agent.position = { x: tile.x, y: tile.y };
+
+    this.emit('agent:placed', { agent, tile });
+
+    return true;
+  }
+
+  /**
+   * Remove an agent from their current tile
+   */
+  public removeAgentFromCurrentTile(agent: Agent): void {
+    // This would need to be implemented with a reverse lookup
+    // For now, we'll assume the tile manager handles this
+  }
+
+  /**
+   * Get all agents on a specific tile
+   */
+  public getAgentsOnTile(tile: WorldTile): Agent[] {
+    return tile.agents
+      .map(agentId => this.getAgent(agentId))
+      .filter(agent => agent !== undefined) as Agent[];
+  }
+
+  /**
+   * Move an agent to a new position and update their tile
+   */
+  public moveAgent(agent: Agent, newPosition: { x: number; y: number }, newTile?: WorldTile): void {
+    // Update agent position
+    agent.position = newPosition;
+    
+    // If new tile is provided, place agent on it
+    if (newTile) {
+      this.placeAgentOnTile(agent, newTile);
+    }
+
+    this.emit('agent:moved', { agent, newPosition, newTile });
+  }
+
+  /**
+   * Get agents within a certain range of a position
+   */
+  public getAgentsInRange(center: { x: number; y: number }, range: number): Agent[] {
+    const agents = Array.from(this.agents.values());
+    return agents.filter(agent => {
+      const distance = Math.sqrt(
+        Math.pow(agent.position.x - center.x, 2) + 
+        Math.pow(agent.position.y - center.y, 2)
+      );
+      return distance <= range;
+    });
   }
 
   // Helper methods for generating agent properties

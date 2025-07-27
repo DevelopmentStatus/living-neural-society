@@ -68,7 +68,7 @@ export const SimulationProvider: React.FC<SimulationProviderProps> = ({ children
           setIsPaused(false);
         });
 
-        simulationEngine.on('simulation:tick', (tickData) => {
+        simulationEngine.on('simulation:tick', () => {
           // Update state and statistics on each tick
           setState(simulationEngine.getState());
           setStatistics(simulationEngine.getStatistics());

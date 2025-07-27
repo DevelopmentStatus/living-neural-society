@@ -1,572 +1,666 @@
-import { WorldTile, TileType } from '../../types/simulation';
-import { MultiScaleWorldManager, MultiScaleConfig } from './MultiScaleWorldManager';
+import { WorldTile, TileConnection, ConnectionType, Agent, TileType } from '../../types/simulation';
 
-export interface RenderOptions {
-  showPoliticalRegions: boolean;
-  showCities: boolean;
-  showRivers: boolean;
-  showLakes: boolean;
-  showRoads: boolean;
-  showBuildings: boolean;
-  showNPCs: boolean;
-  showDetails: boolean;
-  showUI: boolean;
+export interface RenderConfig {
+  tileSize: number;
+  zoomLevel: number;
+  showAgents: boolean;
+  showConnections: boolean;
+  showResources: boolean;
+  showStructures: boolean;
+  agentSize: number;
+  connectionWidth: number;
+  resourceSize: number;
+  structureSize: number;
 }
 
-export interface Camera {
-  x: number;
-  y: number;
-  zoom: number;
+export interface RenderData {
+  tiles: WorldTile[][];
+  agents: Agent[];
+  connections: TileConnection[];
+  rivers?: any[];
+  lakes?: any[];
+  roads?: any[];
+  zoomLevel: number;
+  centerX: number;
+  centerY: number;
+  viewportWidth: number;
+  viewportHeight: number;
 }
 
 export class EnhancedWorldRenderer {
-  private canvas: HTMLCanvasElement;
-  private ctx: CanvasRenderingContext2D;
-  private multiScaleManager: MultiScaleWorldManager;
-  private camera: Camera;
-  private options: RenderOptions;
-  private isDragging: boolean = false;
-  private lastMousePos: { x: number; y: number } = { x: 0, y: 0 };
-  private worldBounds: { minX: number; minY: number; maxX: number; maxY: number } = { minX: 0, minY: 0, maxX: 1000, maxY: 1000 };
-  
-  constructor(canvas: HTMLCanvasElement, config: MultiScaleConfig, worldData?: any) {
+  private config: RenderConfig;
+  private canvas: HTMLCanvasElement | null = null;
+  private ctx: CanvasRenderingContext2D | null = null;
+
+  constructor(config: RenderConfig) {
+    this.config = config;
+  }
+
+  /**
+   * Set the canvas for rendering
+   */
+  public setCanvas(canvas: HTMLCanvasElement): void {
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d')!;
-    this.multiScaleManager = new MultiScaleWorldManager(config);
-    this.camera = { x: 0, y: 0, zoom: 1 };
-    this.options = {
-      showPoliticalRegions: true,
-      showCities: true,
-      showRivers: true,
-      showLakes: true,
-      showRoads: true,
-      showBuildings: true,
-      showNPCs: true,
-      showDetails: true,
-      showUI: true
-    };
-    
-    // Set FMG world data if provided
-    if (worldData) {
-      this.setFMGWorldData(worldData);
+    this.ctx = canvas.getContext('2d');
+    if (!this.ctx) {
+      throw new Error('Could not get 2D context from canvas');
     }
-    
-    this.setupEventListeners();
   }
-  
-  // Add method to set FMG world data
-  public setFMGWorldData(worldData: any): void {
-    this.multiScaleManager.setFMGWorldData(worldData);
-    console.log('🗺️ FMG world data set in EnhancedWorldRenderer');
-  }
-  
-  private setupEventListeners(): void {
-    // Mouse panning
-    this.canvas.addEventListener('mousedown', (e) => {
-      this.isDragging = true;
-      this.lastMousePos = { x: e.clientX, y: e.clientY };
-    });
-    
-    this.canvas.addEventListener('mousemove', (e) => {
-      if (this.isDragging) {
-        const deltaX = e.clientX - this.lastMousePos.x;
-        const deltaY = e.clientY - this.lastMousePos.y;
-        
-        this.camera.x -= deltaX / this.camera.zoom;
-        this.camera.y -= deltaY / this.camera.zoom;
-        
-        this.clampCameraToBounds();
-        this.lastMousePos = { x: e.clientX, y: e.clientY };
-      }
-    });
-    
-    this.canvas.addEventListener('mouseup', () => {
-      this.isDragging = false;
-    });
-    
-    // Mouse wheel zooming
-    this.canvas.addEventListener('wheel', (e) => {
-      e.preventDefault();
-      const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-      const mouseX = e.clientX;
-      const mouseY = e.clientY;
-      
-      this.zoomAt(mouseX, mouseY, zoomFactor);
-    });
-    
-    // Keyboard controls
-    document.addEventListener('keydown', (e) => {
-      const panSpeed = 50 / this.camera.zoom;
-      
-      switch (e.key.toLowerCase()) {
-        case 'w':
-        case 'arrowup':
-          this.camera.y -= panSpeed;
-          break;
-        case 's':
-        case 'arrowdown':
-          this.camera.y += panSpeed;
-          break;
-        case 'a':
-        case 'arrowleft':
-          this.camera.x -= panSpeed;
-          break;
-        case 'd':
-        case 'arrowright':
-          this.camera.x += panSpeed;
-          break;
-        case '+':
-        case '=':
-          this.zoomAt(this.canvas.width / 2, this.canvas.height / 2, 1.1);
-          break;
-        case '-':
-          this.zoomAt(this.canvas.width / 2, this.canvas.height / 2, 0.9);
-          break;
-        case '0':
-          this.resetCamera();
-          break;
-      }
-      
-      this.clampCameraToBounds();
-    });
-  }
-  
-  private zoomAt(screenX: number, screenY: number, factor: number): void {
-    const oldZoom = this.camera.zoom;
-    this.camera.zoom *= factor;
-    this.camera.zoom = Math.max(0.1, Math.min(10, this.camera.zoom));
-    
-    // Adjust camera position to zoom towards mouse
-    const zoomRatio = this.camera.zoom / oldZoom;
-    this.camera.x = screenX - (screenX - this.camera.x) * zoomRatio;
-    this.camera.y = screenY - (screenY - this.camera.y) * zoomRatio;
-  }
-  
-  private clampCameraToBounds(): void {
-    const viewportWidth = this.canvas.width / this.camera.zoom;
-    const viewportHeight = this.canvas.height / this.camera.zoom;
-    
-    this.camera.x = Math.max(this.worldBounds.minX, Math.min(this.worldBounds.maxX - viewportWidth, this.camera.x));
-    this.camera.y = Math.max(this.worldBounds.minY, Math.min(this.worldBounds.maxY - viewportHeight, this.camera.y));
-  }
-  
-  private resetCamera(): void {
-    this.camera.x = (this.worldBounds.maxX - this.worldBounds.minX) / 2;
-    this.camera.y = (this.worldBounds.maxY - this.worldBounds.minY) / 2;
-    this.camera.zoom = 1;
-  }
-  
-  public getCamera(): Camera {
-    return { ...this.camera };
-  }
-  
-  public setCamera(x: number, y: number, zoom: number): void {
-    this.camera.x = x;
-    this.camera.y = y;
-    this.camera.zoom = Math.max(0.1, Math.min(10, zoom));
-    this.clampCameraToBounds();
-  }
-  
-  public setRenderOptions(options: Partial<RenderOptions>): void {
-    this.options = { ...this.options, ...options };
-  }
-  
-  public render(): void {
-    // Clear canvas
-    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    
-    // Get visible area
-    const visibleArea = this.getVisibleArea();
-    
-    // Get world data for current zoom level
-    const worldData = this.multiScaleManager.getWorldData(
-      this.camera.zoom,
-      this.camera.x,
-      this.camera.y,
-      this.canvas.width / this.camera.zoom,
-      this.canvas.height / this.camera.zoom
-    );
-    
-    if (!worldData) {
-      console.log('❌ No world data received from MultiScaleManager');
+
+  /**
+   * Render the world with hierarchical tiles
+   */
+  public render(data: RenderData): void {
+    if (!this.ctx || !this.canvas) {
+      console.warn('Canvas not set for rendering');
       return;
     }
+
+    // Clear canvas and add background
+    this.ctx.fillStyle = '#1a1a2e'; // Dark blue background
+    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+    // Calculate visible tiles
+    const visibleTiles = this.getVisibleTiles(data);
     
-    // Debug: Log what we're rendering
-    if (worldData.tiles) {
-      console.log(`🗺️ Rendering ${worldData.tiles.length}x${worldData.tiles[0]?.length || 0} tiles`);
-      console.log(`🏛️ Political regions: ${worldData.politicalRegions?.length || 0}`);
-      console.log(`🌊 Rivers: ${worldData.rivers?.length || 0}`);
-      console.log(`🏙️ Cities: ${worldData.cities?.length || 0}`);
+    // Debug info only in development
+    if (process.env['NODE_ENV'] === 'development') {
+      console.log('🎨 Rendering:', {
+        totalTiles: data.tiles?.flat().filter(t => t).length || 0,
+        visibleTiles: visibleTiles.length,
+        canvasSize: { width: this.canvas.width, height: this.canvas.height },
+        viewport: { width: data.viewportWidth, height: data.viewportHeight },
+        camera: { x: data.centerX, y: data.centerY, zoom: data.zoomLevel }
+      });
     }
-    
-    // Apply camera transform
-    this.ctx.save();
-    this.ctx.translate(-this.camera.x * this.camera.zoom, -this.camera.y * this.camera.zoom);
-    this.ctx.scale(this.camera.zoom, this.camera.zoom);
-    
-    // Render based on zoom level
-    if (this.camera.zoom < 0.5) {
-      this.renderWorldLevel(worldData, visibleArea);
-    } else if (this.camera.zoom < 2) {
-      this.renderRegionLevel(worldData, visibleArea);
-    } else if (this.camera.zoom < 5) {
-      this.renderTownLevel(worldData, visibleArea);
-    } else {
-      this.renderCityLevel(worldData, visibleArea);
+
+    // Render tiles
+    this.renderTiles(visibleTiles, data);
+
+    // Render connections
+    if (this.config.showConnections) {
+      this.renderConnections(visibleTiles, data);
     }
+
+    // Render structures
+    if (this.config.showStructures) {
+      this.renderStructures(visibleTiles, data);
+    }
+
+    // Render resources
+    if (this.config.showResources) {
+      this.renderResources(visibleTiles, data);
+    }
+
+    // Render agents
+    if (this.config.showAgents) {
+      this.renderAgents(data.agents, data);
+    }
+
+    // Render rivers
+    this.renderRivers(data);
+
+    // Render roads
+    this.renderRoads(data);
+
+    // Render tile borders and labels
+    this.renderTileBorders(visibleTiles, data);
+  }
+
+  /**
+   * Get tiles visible in the current viewport
+   */
+  private getVisibleTiles(data: RenderData): WorldTile[] {
+    const visibleTiles: WorldTile[] = [];
+    const tileSize = this.config.tileSize * Math.max(1, data.zoomLevel);
+
+    // Debug info only in development
+    if (process.env['NODE_ENV'] === 'development') {
+      console.log('🔍 getVisibleTiles debug:', {
+        totalRows: data.tiles?.length || 0,
+        tilesPerRow: data.tiles?.[0]?.length || 0,
+        tileSize: tileSize,
+        configTileSize: this.config.tileSize,
+        zoomLevel: data.zoomLevel,
+        centerX: data.centerX,
+        centerY: data.centerY,
+        viewportWidth: data.viewportWidth,
+        viewportHeight: data.viewportHeight,
+        sampleTile: data.tiles?.[0]?.[0] ? {
+          x: data.tiles[0][0].x,
+          y: data.tiles[0][0].y,
+          type: data.tiles[0][0].type
+        } : null,
+        totalTiles: data.tiles?.flat().filter(t => t).length || 0
+      });
+    }
+
+    for (const row of data.tiles) {
+      for (const tile of row) {
+        if (tile) {
+          const screenX = (tile.x - data.centerX) * this.config.tileSize * data.zoomLevel + data.viewportWidth / 2;
+          const screenY = (tile.y - data.centerY) * this.config.tileSize * data.zoomLevel + data.viewportHeight / 2;
+          const screenTileSize = this.config.tileSize * data.zoomLevel;
+
+          // Check if tile is visible
+          if (screenX + screenTileSize > 0 && screenX < data.viewportWidth &&
+              screenY + screenTileSize > 0 && screenY < data.viewportHeight) {
+            visibleTiles.push(tile);
+          }
+        }
+      }
+    }
+
+    // Debug info only in development
+    if (process.env['NODE_ENV'] === 'development') {
+      console.log('🔍 Visible tiles found:', visibleTiles.length);
+    }
+
+    return visibleTiles;
+  }
+
+  /**
+   * Render tiles using ASCII characters like Dwarf Fortress
+   */
+  private renderTiles(tiles: WorldTile[], data: RenderData): void {
+    if (!this.ctx) return;
+
+    const tileSize = this.config.tileSize * Math.max(1, data.zoomLevel);
     
-    this.ctx.restore();
-    
-    // Render UI overlay
-    if (this.options.showUI) {
-      this.renderUI();
+    // Debug info only in development
+    if (process.env['NODE_ENV'] === 'development') {
+      console.log('🎨 Rendering tiles:', {
+        tileCount: tiles.length,
+        tileSize: tileSize,
+        configTileSize: this.config.tileSize,
+        zoomLevel: data.zoomLevel,
+        sampleTile: tiles[0] ? { x: tiles[0].x, y: tiles[0].y, type: tiles[0].type } : null
+      });
+    }
+
+    // Set up font for ASCII rendering
+    this.ctx.font = `${data.zoomLevel}px 'Courier New', monospace`;
+    this.ctx.textAlign = 'center';
+    this.ctx.textBaseline = 'middle';
+
+    let renderedCount = 0;
+    for (const tile of tiles) {
+      const screenX = (tile.x - data.centerX) * this.config.tileSize * data.zoomLevel + data.viewportWidth / 2;
+      const screenY = (tile.y - data.centerY) * this.config.tileSize * data.zoomLevel + data.viewportHeight / 2;
+
+      // Get ASCII character and color for this tile
+      const { char, color } = this.getTileAscii(tile);
+      
+      // Draw ASCII character
+      this.ctx.fillStyle = color;
+      this.ctx.fillText(char, screenX, screenY);
+      renderedCount++;
+
+      // Render expansion indicator if tile is expanded
+      if (tile.isExpanded) {
+        this.renderExpansionIndicator(screenX, screenY, tileSize);
+      }
+    }
+
+    // Debug info only in development
+    if (process.env['NODE_ENV'] === 'development') {
+      console.log('🎨 Actually rendered tiles:', renderedCount);
     }
   }
-  
-  private getVisibleArea(): { minX: number; minY: number; maxX: number; maxY: number } {
-    const viewportWidth = this.canvas.width / this.camera.zoom;
-    const viewportHeight = this.canvas.height / this.camera.zoom;
-    
-    return {
-      minX: this.camera.x,
-      minY: this.camera.y,
-      maxX: this.camera.x + viewportWidth,
-      maxY: this.camera.y + viewportHeight
-    };
-  }
-  
-  private renderWorldLevel(worldData: any, visibleArea: any): void {
-    // Render world-level features (continents, major rivers, etc.)
-    this.renderTiles(worldData.tiles, visibleArea);
-    
-    if (this.options.showPoliticalRegions) {
-      this.renderPoliticalRegions(worldData.politicalRegions, visibleArea);
-    }
-    
-    if (this.options.showRivers) {
-      this.renderRivers(worldData.rivers, visibleArea);
-    }
-    
-    if (this.options.showCities) {
-      this.renderCities(worldData.cities, visibleArea);
-    }
-  }
-  
-  private renderRegionLevel(worldData: any, visibleArea: any): void {
-    // Render regional features (towns, roads, detailed terrain)
-    this.renderTiles(worldData.tiles, visibleArea);
-    
-    if (this.options.showRoads) {
-      this.renderRoads(worldData.roads, visibleArea);
-    }
-    
-    if (this.options.showRivers) {
-      this.renderRivers(worldData.rivers, visibleArea);
-    }
-    
-    if (this.options.showCities) {
-      this.renderCities(worldData.cities, visibleArea);
+
+  /**
+   * Render connections between tiles
+   */
+  private renderConnections(tiles: WorldTile[], data: RenderData): void {
+    if (!this.ctx) return;
+
+    const tileSize = this.config.tileSize * Math.pow(2, data.zoomLevel);
+
+    for (const tile of tiles) {
+      for (const connection of tile.connections) {
+        const targetTile = this.findTileByPosition(connection.targetTile.x, connection.targetTile.y, data.tiles);
+        if (!targetTile) continue;
+
+        const startX = (tile.x - data.centerX) * tileSize + data.viewportWidth / 2 + tileSize / 2;
+        const startY = (tile.y - data.centerY) * tileSize + data.viewportHeight / 2 + tileSize / 2;
+        const endX = (targetTile.x - data.centerX) * tileSize + data.viewportWidth / 2 + tileSize / 2;
+        const endY = (targetTile.y - data.centerY) * tileSize + data.viewportHeight / 2 + tileSize / 2;
+
+        // Set connection style based on type
+        this.ctx.strokeStyle = this.getConnectionColor(connection.type);
+        this.ctx.lineWidth = this.config.connectionWidth * connection.strength;
+        this.ctx.setLineDash(this.getConnectionDash(connection.type));
+
+        this.ctx.beginPath();
+        this.ctx.moveTo(startX, startY);
+        this.ctx.lineTo(endX, endY);
+        this.ctx.stroke();
+
+        this.ctx.setLineDash([]); // Reset dash pattern
+      }
     }
   }
-  
-  private renderTownLevel(worldData: any, visibleArea: any): void {
-    // Render town-level features (buildings, streets, walls)
-    this.renderTiles(worldData.tiles, visibleArea);
-    
-    if (this.options.showRoads) {
-      this.renderRoads(worldData.roads, visibleArea);
-    }
-    
-    if (this.options.showBuildings) {
-      this.renderBuildings(worldData.structures, visibleArea);
-    }
-  }
-  
-  private renderCityLevel(worldData: any, visibleArea: any): void {
-    // Render city-level features (individual buildings, NPCs, details)
-    this.renderTiles(worldData.tiles, visibleArea);
-    
-    if (this.options.showBuildings) {
-      this.renderBuildings(worldData.structures, visibleArea);
-    }
-    
-    if (this.options.showNPCs) {
-      this.renderNPCs(worldData.agents, visibleArea);
-    }
-    
-    if (this.options.showDetails) {
-      this.renderDetails(worldData.structures, visibleArea);
-    }
-  }
-  
-  private renderTiles(tiles: WorldTile[][], visibleArea: any): void {
-    if (!tiles || tiles.length === 0) {
-      console.log('❌ No tiles to render');
-      return;
-    }
-    
-    const tileSize = 10; // Fixed tile size for now
-    
-    for (let x = 0; x < tiles.length; x++) {
-      const row = tiles[x];
-      if (!row) continue;
-      for (let y = 0; y < row.length; y++) {
-        const tile = row[y];
-        if (!tile) continue;
-        
-        // Check if tile is in visible area
-        const tileX = x * tileSize;
-        const tileY = y * tileSize;
-        
-        if (tileX >= visibleArea.minX && tileX <= visibleArea.maxX &&
-            tileY >= visibleArea.minY && tileY <= visibleArea.maxY) {
-          this.renderTile(tile);
+
+  /**
+   * Render structures on tiles
+   */
+  private renderStructures(tiles: WorldTile[], data: RenderData): void {
+    if (!this.ctx) return;
+
+    const tileSize = this.config.tileSize * Math.pow(2, data.zoomLevel);
+    const structureSize = this.config.structureSize * Math.pow(2, data.zoomLevel);
+
+    for (const tile of tiles) {
+      const baseX = (tile.x - data.centerX) * tileSize + data.viewportWidth / 2;
+      const baseY = (tile.y - data.centerY) * tileSize + data.viewportHeight / 2;
+
+      // Render tile structures
+      for (const structure of tile.structures) {
+        const structureX = baseX + (structure.position.x - tile.x) * tileSize;
+        const structureY = baseY + (structure.position.y - tile.y) * tileSize;
+
+        this.ctx.fillStyle = this.getStructureColor(structure.type);
+        this.ctx.fillRect(structureX, structureY, structureSize, structureSize);
+
+        // Add structure border
+        this.ctx.strokeStyle = '#000';
+        this.ctx.lineWidth = 1;
+        this.ctx.strokeRect(structureX, structureY, structureSize, structureSize);
+      }
+
+      // Render tile data buildings
+      if (tile.tileData.buildings) {
+        for (const building of tile.tileData.buildings) {
+          const buildingX = baseX + (building.position.x - tile.x) * tileSize;
+          const buildingY = baseY + (building.position.y - tile.y) * tileSize;
+
+          this.ctx.fillStyle = this.getBuildingColor(building.type);
+          this.ctx.fillRect(buildingX, buildingY, structureSize, structureSize);
+
+          // Add building border
+          this.ctx.strokeStyle = '#000';
+          this.ctx.lineWidth = 1;
+          this.ctx.strokeRect(buildingX, buildingY, structureSize, structureSize);
         }
       }
     }
   }
-  
-  private renderTile(tile: WorldTile): void {
-    const tileSize = 10;
-    const x = tile.x * tileSize;
-    const y = tile.y * tileSize;
-    
-    const color = this.getTileColor(tile);
-    this.ctx.fillStyle = color;
-    this.ctx.fillRect(x, y, tileSize, tileSize);
-    
-    // Add elevation shading
-    if (tile.elevation !== undefined) {
-      const shade = Math.max(0, Math.min(1, tile.elevation));
-      this.ctx.fillStyle = `rgba(0, 0, 0, ${0.3 * (1 - shade)})`;
-      this.ctx.fillRect(x, y, tileSize, tileSize);
+
+  /**
+   * Render resources on tiles
+   */
+  private renderResources(tiles: WorldTile[], data: RenderData): void {
+    if (!this.ctx) return;
+
+    const tileSize = this.config.tileSize * Math.pow(2, data.zoomLevel);
+    const resourceSize = this.config.resourceSize * Math.pow(2, data.zoomLevel);
+
+    for (const tile of tiles) {
+      const baseX = (tile.x - data.centerX) * tileSize + data.viewportWidth / 2;
+      const baseY = (tile.y - data.centerY) * tileSize + data.viewportHeight / 2;
+
+      // Render tile resources
+      for (const resource of tile.resources) {
+        const resourceX = baseX + Math.random() * (tileSize - resourceSize);
+        const resourceY = baseY + Math.random() * (tileSize - resourceSize);
+
+        this.ctx.fillStyle = this.getResourceColor(resource.type);
+        this.ctx.beginPath();
+        this.ctx.arc(resourceX + resourceSize / 2, resourceY + resourceSize / 2, resourceSize / 2, 0, 2 * Math.PI);
+        this.ctx.fill();
+
+        // Add resource border
+        this.ctx.strokeStyle = '#000';
+        this.ctx.lineWidth = 1;
+        this.ctx.stroke();
+      }
+
+      // Render tile data resource nodes
+      for (const node of tile.tileData.resourceNodes) {
+        const nodeX = baseX + (node.position.x - tile.x) * tileSize;
+        const nodeY = baseY + (node.position.y - tile.y) * tileSize;
+
+        this.ctx.fillStyle = this.getResourceColor(node.type);
+        this.ctx.beginPath();
+        this.ctx.arc(nodeX + resourceSize / 2, nodeY + resourceSize / 2, resourceSize / 2, 0, 2 * Math.PI);
+        this.ctx.fill();
+
+        // Add node border
+        this.ctx.strokeStyle = '#000';
+        this.ctx.lineWidth = 1;
+        this.ctx.stroke();
+      }
     }
   }
-  
-  private getTileColor(tile: WorldTile): string {
+
+  /**
+   * Render agents
+   */
+  private renderAgents(agents: Agent[], data: RenderData): void {
+    if (!this.ctx) return;
+
+    const tileSize = this.config.tileSize * Math.pow(2, data.zoomLevel);
+    const agentSize = this.config.agentSize * Math.pow(2, data.zoomLevel);
+
+    // Set up font for agent rendering
+    this.ctx.font = `${agentSize * 0.8}px 'Courier New', monospace`;
+    this.ctx.textAlign = 'center';
+    this.ctx.textBaseline = 'middle';
+
+    for (const agent of agents) {
+      const screenX = (agent.position.x - data.centerX) * tileSize + data.viewportWidth / 2;
+      const screenY = (agent.position.y - data.centerY) * tileSize + data.viewportHeight / 2;
+
+      // Check if agent is visible
+      if (screenX + agentSize > 0 && screenX < data.viewportWidth &&
+          screenY + agentSize > 0 && screenY < data.viewportHeight) {
+
+        // Get agent ASCII character and color
+        const { char, color } = this.getAgentAscii(agent);
+        
+        // Draw agent as ASCII character
+        this.ctx.fillStyle = color;
+        this.ctx.fillText(char, screenX + agentSize / 2, screenY + agentSize / 2);
+
+        // Add agent name if zoomed in enough
+        if (data.zoomLevel > 1) {
+          this.ctx.fillStyle = '#000';
+          this.ctx.font = `${12 * Math.pow(2, data.zoomLevel)}px Arial`;
+          this.ctx.textAlign = 'center';
+          this.ctx.fillText(agent.name, screenX + agentSize / 2, screenY - 5);
+        }
+      }
+    }
+  }
+
+  /**
+   * Render tile borders and labels (disabled in ASCII mode)
+   */
+  private renderTileBorders(tiles: WorldTile[], data: RenderData): void {
+    // Tile borders and labels are not needed in ASCII mode
+    // This function is kept for potential future use
+  }
+
+  /**
+   * Render expansion indicator for expanded tiles
+   */
+  private renderExpansionIndicator(x: number, y: number, size: number): void {
+    if (!this.ctx) return;
+
+    this.ctx.fillStyle = 'rgba(255, 255, 0, 0.3)';
+    this.ctx.fillRect(x, y, size, size);
+
+    this.ctx.strokeStyle = '#FFD700';
+    this.ctx.lineWidth = 2;
+    this.ctx.strokeRect(x, y, size, size);
+  }
+
+  // Helper methods for ASCII rendering like Dwarf Fortress
+  private getTileAscii(tile: WorldTile): { char: string; color: string } {
+    // Check for special features first
+    if (tile.tileData.isRuins) {
+      return { char: '†', color: '#696969' }; // Ruins
+    }
+    if (tile.tileData.isCapital) {
+      return { char: '◊', color: '#FFD700' }; // Capital city
+    }
+    if (tile.tileData.isTradeHub) {
+      return { char: '$', color: '#FFD700' }; // Trade hub
+    }
+    if (tile.tileData.isFort) {
+      return { char: '█', color: '#8B4513' }; // Fortress
+    }
+    if (tile.tileData.isReligiousSite) {
+      return { char: '†', color: '#9370DB' }; // Religious site
+    }
+    if (tile.tileData.isNaturalWonder) {
+      return { char: '★', color: '#FFD700' }; // Natural wonder
+    }
+    if (tile.tileData.isLandmark) {
+      return { char: '◆', color: '#FFD700' }; // Landmark
+    }
+    
+    // Base terrain types with elevation variations
+    const elevation = tile.elevation || 0;
+    
     switch (tile.type) {
-      case TileType.MOUNTAIN:
-        return '#8B7355';
-      case TileType.FOREST:
-        return '#228B22';
-      case TileType.DESERT:
-        return '#F4A460';
-      case TileType.WATER:
-        return '#4169E1';
-      case TileType.GRASS:
-        return '#90EE90';
-      case TileType.ROAD:
-        return '#696969';
-      default:
-        return '#90EE90';
+      case TileType.GRASS: 
+        if (elevation > 0.7) return { char: 'n', color: '#8B7355' }; // Hills
+        return { char: '.', color: '#90EE90' }; // Light green grass
+      case TileType.FOREST: 
+        if (elevation > 0.8) return { char: '♠', color: '#2F4F2F' }; // Dense forest
+        return { char: '♣', color: '#228B22' }; // Sparse forest
+      case TileType.MOUNTAIN: 
+        if (elevation > 0.9) return { char: '▲', color: '#8B0000' }; // Volcano
+        return { char: '^', color: '#8B4513' }; // Mountain peak
+      case TileType.WATER: 
+        if (elevation < 0.2) return { char: '≈', color: '#000080' }; // Deep water
+        return { char: '~', color: '#4169E1' }; // Shallow water
+      case TileType.DESERT: 
+        return { char: '·', color: '#F4A460' }; // Desert sand
+      case TileType.URBAN: 
+        return { char: '#', color: '#696969' }; // Urban building
+      case TileType.FARM: 
+        return { char: '≈', color: '#32CD32' }; // Farm field
+      case TileType.ROAD: 
+        return { char: '=', color: '#A0522D' }; // Road
+      case TileType.HILL: 
+        return { char: 'n', color: '#8B7355' }; // Hills
+      case TileType.SWAMP: 
+        return { char: '~', color: '#556B2F' }; // Swamp
+      case TileType.TUNDRA: 
+        return { char: '.', color: '#8FBC8F' }; // Tundra
+      case TileType.ALPINE: 
+        return { char: '^', color: '#696969' }; // Alpine
+      case TileType.VOLCANO: 
+        return { char: '▲', color: '#8B0000' }; // Volcano
+      case TileType.RUINS: 
+        return { char: '†', color: '#696969' }; // Ruins
+      case TileType.CAPITAL: 
+        return { char: '◊', color: '#FFD700' }; // Capital
+      case TileType.TRADE_HUB: 
+        return { char: '$', color: '#FFD700' }; // Trade hub
+      case TileType.FORTRESS: 
+        return { char: '█', color: '#8B4513' }; // Fortress
+      case TileType.RELIGIOUS_SITE: 
+        return { char: '†', color: '#9370DB' }; // Religious site
+      case TileType.NATURAL_WONDER: 
+        return { char: '★', color: '#FFD700' }; // Natural wonder
+      case TileType.LANDMARK: 
+        return { char: '◆', color: '#FFD700' }; // Landmark
+      default: 
+        return { char: '?', color: '#C0C0C0' }; // Unknown
     }
   }
-  
-  private renderPoliticalRegions(regions: any[], visibleArea: any): void {
-    if (!regions) return;
+
+  private getConnectionColor(type: ConnectionType): string {
+    switch (type) {
+      case ConnectionType.ROAD: return '#8B4513';
+      case ConnectionType.RIVER: return '#4169E1';
+      case ConnectionType.TRADE_ROUTE: return '#FFD700';
+      case ConnectionType.BORDER: return '#FF0000';
+      case ConnectionType.TELEPORT: return '#9932CC';
+      case ConnectionType.UNDERGROUND: return '#654321';
+      case ConnectionType.AIR_ROUTE: return '#87CEEB';
+      case ConnectionType.SEA_ROUTE: return '#000080';
+      default: return '#000000';
+    }
+  }
+
+  private getConnectionDash(type: ConnectionType): number[] {
+    switch (type) {
+      case ConnectionType.BORDER: return [5, 5];
+      case ConnectionType.TELEPORT: return [10, 5];
+      case ConnectionType.UNDERGROUND: return [3, 3];
+      default: return [];
+    }
+  }
+
+  private getStructureColor(type: string): string {
+    switch (type) {
+      case 'house': return '#CD853F';
+      case 'farm': return '#8FBC8F';
+      case 'factory': return '#708090';
+      case 'school': return '#FFB6C1';
+      case 'hospital': return '#FFE4E1';
+      case 'government': return '#F0E68C';
+      case 'market': return '#DDA0DD';
+      case 'temple': return '#DEB887';
+      default: return '#C0C0C0';
+    }
+  }
+
+  private getBuildingColor(type: string): string {
+    return this.getStructureColor(type);
+  }
+
+  private getResourceColor(type: string): string {
+    switch (type) {
+      case 'food': return '#FF6347';
+      case 'water': return '#00CED1';
+      case 'wood': return '#8B4513';
+      case 'stone': return '#696969';
+      case 'metal': return '#C0C0C0';
+      case 'energy': return '#FFFF00';
+      case 'knowledge': return '#9370DB';
+      default: return '#FF69B4';
+    }
+  }
+
+  private getAgentAscii(agent: Agent): { char: string; color: string } {
+    switch (agent.status) {
+      case 'alive': return { char: '@', color: '#00FF00' }; // Living person
+      case 'dead': return { char: '†', color: '#FF0000' }; // Dead person
+      case 'unconscious': return { char: 'x', color: '#FFA500' }; // Unconscious
+      case 'sleeping': return { char: 'z', color: '#4169E1' }; // Sleeping
+      case 'working': return { char: 'w', color: '#FFD700' }; // Working
+      case 'socializing': return { char: '&', color: '#FF69B4' }; // Socializing
+      case 'exploring': return { char: 'e', color: '#32CD32' }; // Exploring
+      case 'fighting': return { char: '!', color: '#DC143C' }; // Fighting
+      case 'fleeing': return { char: 'f', color: '#FF4500' }; // Fleeing
+      default: return { char: '?', color: '#C0C0C0' }; // Unknown status
+    }
+  }
+
+  private getAgentColor(status: string): string {
+    switch (status) {
+      case 'alive': return '#00FF00';
+      case 'dead': return '#FF0000';
+      case 'unconscious': return '#FFA500';
+      case 'sleeping': return '#4169E1';
+      case 'working': return '#FFD700';
+      case 'socializing': return '#FF69B4';
+      case 'exploring': return '#32CD32';
+      case 'fighting': return '#DC143C';
+      case 'fleeing': return '#FF4500';
+      default: return '#C0C0C0';
+    }
+  }
+
+  private findTileByPosition(x: number, y: number, tiles: WorldTile[][]): WorldTile | null {
+    for (const row of tiles) {
+      for (const tile of row) {
+        if (tile && tile.x === x && tile.y === y) {
+          return tile;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Render rivers on the map
+   */
+  private renderRivers(data: RenderData): void {
+    if (!this.ctx) return;
+
+    const tileSize = this.config.tileSize * Math.pow(2, data.zoomLevel);
     
-    for (const region of regions) {
-      if (this.isInVisibleArea(region, visibleArea)) {
-        this.renderPoliticalRegion(region);
+    // Set up font for river rendering
+    this.ctx.font = `${tileSize * 0.6}px 'Courier New', monospace`;
+    this.ctx.textAlign = 'center';
+    this.ctx.textBaseline = 'middle';
+
+    // Render rivers from world data
+    if (data.rivers) {
+      for (const river of data.rivers) {
+        if (river.points && river.points.length > 0) {
+          const riverChar = river.type === 'major' ? '≈' : '~';
+          const riverColor = river.type === 'major' ? '#0000FF' : '#4169E1';
+          
+          this.ctx.fillStyle = riverColor;
+          
+          for (const point of river.points) {
+            const screenX = (point.x - data.centerX) * tileSize + data.viewportWidth / 2;
+            const screenY = (point.y - data.centerY) * tileSize + data.viewportHeight / 2;
+            
+            // Check if river point is visible
+            if (screenX + tileSize > 0 && screenX < data.viewportWidth &&
+                screenY + tileSize > 0 && screenY < data.viewportHeight) {
+              this.ctx.fillText(riverChar, screenX, screenY);
+            }
+          }
+        }
       }
     }
   }
-  
-  private renderPoliticalRegion(region: any): void {
-    // Render political region boundaries
-    this.ctx.strokeStyle = region.color || '#FF0000';
-    this.ctx.lineWidth = 2;
-    this.ctx.strokeRect(region.x, region.y, region.width, region.height);
+
+  /**
+   * Render roads on the map
+   */
+  private renderRoads(data: RenderData): void {
+    if (!this.ctx) return;
+
+    const tileSize = this.config.tileSize * Math.pow(2, data.zoomLevel);
     
-    // Render region name
-    this.ctx.fillStyle = '#000000';
-    this.ctx.font = '12px Arial';
-    this.ctx.fillText(region.name, region.x + 5, region.y + 15);
-  }
-  
-  private renderRivers(rivers: any[], visibleArea: any): void {
-    if (!rivers) return;
-    
-    this.ctx.strokeStyle = '#4169E1';
-    this.ctx.lineWidth = 2;
-    
-    for (const river of rivers) {
-      if (this.isRiverInVisibleArea(river, visibleArea)) {
-        this.renderRiver(river);
+    // Set up font for road rendering
+    this.ctx.font = `${tileSize * 0.5}px 'Courier New', monospace`;
+    this.ctx.textAlign = 'center';
+    this.ctx.textBaseline = 'middle';
+
+    // Render roads from world data
+    if (data.roads) {
+      for (const road of data.roads) {
+        if (road.start && road.end) {
+          const roadChar = road.type === 'major' ? '=' : '-';
+          const roadColor = road.type === 'major' ? '#A0522D' : '#8B7355';
+          
+          this.ctx.fillStyle = roadColor;
+          
+          // Calculate road points along the path
+          const points = this.calculateRoadPoints(road.start, road.end);
+          
+          for (const point of points) {
+            const screenX = (point.x - data.centerX) * tileSize + data.viewportWidth / 2;
+            const screenY = (point.y - data.centerY) * tileSize + data.viewportHeight / 2;
+            
+            // Check if road point is visible
+            if (screenX + tileSize > 0 && screenX < data.viewportWidth &&
+                screenY + tileSize > 0 && screenY < data.viewportHeight) {
+              this.ctx.fillText(roadChar, screenX, screenY);
+            }
+          }
+        }
       }
     }
   }
-  
-  private renderRiver(river: any): void {
-    if (!river.points || river.points.length < 2) return;
+
+  /**
+   * Calculate points along a road path
+   */
+  private calculateRoadPoints(start: { x: number; y: number }, end: { x: number; y: number }): { x: number; y: number }[] {
+    const points = [];
+    const distance = Math.sqrt(Math.pow(end.x - start.x, 2) + Math.pow(end.y - start.y, 2));
+    const steps = Math.max(1, Math.floor(distance / 10));
     
-    this.ctx.beginPath();
-    this.ctx.moveTo(river.points[0]?.x || 0, river.points[0]?.y || 0);
-    
-    for (let i = 1; i < river.points.length; i++) {
-      this.ctx.lineTo(river.points[i]?.x || 0, river.points[i]?.y || 0);
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      points.push({
+        x: start.x + (end.x - start.x) * t,
+        y: start.y + (end.y - start.y) * t
+      });
     }
     
-    this.ctx.stroke();
-  }
-  
-  private renderRoads(roads: any[], visibleArea: any): void {
-    if (!roads) return;
-    
-    this.ctx.strokeStyle = '#696969';
-    this.ctx.lineWidth = 1;
-    
-    for (const road of roads) {
-      if (this.isRoadInVisibleArea(road, visibleArea)) {
-        this.renderRoad(road);
-      }
-    }
-  }
-  
-  private renderRoad(road: any): void {
-    if (!road.points || road.points.length < 2) return;
-    
-    this.ctx.beginPath();
-    this.ctx.moveTo(road.points[0]?.x || 0, road.points[0]?.y || 0);
-    
-    for (let i = 1; i < road.points.length; i++) {
-      this.ctx.lineTo(road.points[i]?.x || 0, road.points[i]?.y || 0);
-    }
-    
-    this.ctx.stroke();
-  }
-  
-  private renderCities(cities: any[], visibleArea: any): void {
-    if (!cities) return;
-    
-    for (const city of cities) {
-      if (this.isInVisibleArea(city, visibleArea)) {
-        this.renderCity(city);
-      }
-    }
-  }
-  
-  private renderCity(city: any): void {
-    const size = city.size || 5;
-    
-    // Draw city marker
-    this.ctx.fillStyle = '#FF0000';
-    this.ctx.beginPath();
-    this.ctx.arc(city.x, city.y, size, 0, 2 * Math.PI);
-    this.ctx.fill();
-    
-    // Draw city name
-    this.ctx.fillStyle = '#000000';
-    this.ctx.font = '10px Arial';
-    this.ctx.fillText(city.name, city.x + size + 2, city.y);
-  }
-  
-  private renderBuildings(buildings: any[], visibleArea: any): void {
-    if (!buildings) return;
-    
-    for (const building of buildings) {
-      if (this.isInVisibleArea(building, visibleArea)) {
-        this.renderBuilding(building);
-      }
-    }
-  }
-  
-  private renderBuilding(building: any): void {
-    const x = building.position.x;
-    const y = building.position.y;
-    const width = building.size?.width || 5;
-    const height = building.size?.height || 5;
-    
-    // Draw building
-    this.ctx.fillStyle = '#8B4513';
-    this.ctx.fillRect(x, y, width, height);
-    
-    // Draw building outline
-    this.ctx.strokeStyle = '#000000';
-    this.ctx.lineWidth = 1;
-    this.ctx.strokeRect(x, y, width, height);
-  }
-  
-  private renderNPCs(npcs: any[], visibleArea: any): void {
-    if (!npcs) return;
-    
-    for (const npc of npcs) {
-      if (this.isInVisibleArea(npc, visibleArea)) {
-        this.renderNPC(npc);
-      }
-    }
-  }
-  
-  private renderNPC(npc: any): void {
-    const x = npc.position.x;
-    const y = npc.position.y;
-    
-    // Draw NPC
-    this.ctx.fillStyle = '#FF69B4';
-    this.ctx.beginPath();
-    this.ctx.arc(x, y, 2, 0, 2 * Math.PI);
-    this.ctx.fill();
-  }
-  
-  private renderDetails(details: any[], visibleArea: any): void {
-    if (!details) return;
-    
-    for (const detail of details) {
-      if (this.isInVisibleArea(detail, visibleArea)) {
-        this.renderDetail(detail);
-      }
-    }
-  }
-  
-  private renderDetail(detail: any): void {
-    // Render environmental details
-    this.ctx.fillStyle = '#228B22';
-    this.ctx.beginPath();
-    this.ctx.arc(detail.x, detail.y, 1, 0, 2 * Math.PI);
-    this.ctx.fill();
-  }
-  
-  private renderUI(): void {
-    // Render camera info
-    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    this.ctx.fillRect(10, 10, 200, 80);
-    
-    this.ctx.fillStyle = '#FFFFFF';
-    this.ctx.font = '12px Arial';
-    this.ctx.fillText(`Camera: (${Math.round(this.camera.x)}, ${Math.round(this.camera.y)})`, 15, 25);
-    this.ctx.fillText(`Zoom: ${this.camera.zoom.toFixed(2)}x`, 15, 40);
-    this.ctx.fillText(`Controls: WASD/Arrows to pan`, 15, 55);
-    this.ctx.fillText(`Mouse wheel to zoom, 0 to reset`, 15, 70);
-  }
-  
-  // Helper methods for visibility checks
-  private isInVisibleArea(entity: any, visibleArea: any): boolean {
-    return entity.x >= visibleArea.minX && entity.x <= visibleArea.maxX &&
-           entity.y >= visibleArea.minY && entity.y <= visibleArea.maxY;
-  }
-  
-  private isRiverInVisibleArea(river: any, visibleArea: any): boolean {
-    if (!river.points) return false;
-    
-    for (const point of river.points) {
-      if (point.x >= visibleArea.minX && point.x <= visibleArea.maxX &&
-          point.y >= visibleArea.minY && point.y <= visibleArea.maxY) {
-        return true;
-      }
-    }
-    return false;
-  }
-  
-  private isRoadInVisibleArea(road: any, visibleArea: any): boolean {
-    if (!road.points) return false;
-    
-    for (const point of road.points) {
-      if (point.x >= visibleArea.minX && point.x <= visibleArea.maxX &&
-          point.y >= visibleArea.minY && point.y <= visibleArea.maxY) {
-        return true;
-      }
-    }
-    return false;
+    return points;
   }
 } 

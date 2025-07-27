@@ -1,7 +1,7 @@
 import { Agent } from '../../types/simulation';
 
 export interface AIDecision {
-  type: 'move' | 'rest' | 'socialize' | 'work' | 'explore' | 'fight' | 'flee';
+  type: 'move' | 'rest' | 'socialize' | 'work' | 'explore' | 'fight' | 'flee' | 'build_road';
   priority: number;
   velocity?: { x: number; y: number };
   target?: { x: number; y: number };
@@ -103,6 +103,19 @@ export class AgentAI {
           x: Math.random() * 1000,
           y: Math.random() * 1000,
         },
+      });
+    }
+
+    // Build road action - based on conscientiousness and energy
+    if (this.agent.personality.conscientiousness > 0.7 && this.agent.energy > 0.6) {
+      actions.push({
+        type: 'build_road',
+        priority: 0.4,
+        data: {
+          requiresEnergy: true,
+          requiresResources: true,
+          duration: 100 // Ticks to complete road building
+        }
       });
     }
 

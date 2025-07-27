@@ -1,12 +1,13 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { useSimulation } from '../contexts/SimulationContext';
-import { EnhancedWorldRenderer } from '../core/world/EnhancedWorldRenderer';
-import { MultiScaleConfig } from '../core/world/MultiScaleWorldManager';
-import { FMGWorldGenerator } from '../core/world/FMGWorldGenerator';
+import { DwarfFortressWorldGenerator, DwarfFortressConfig, DFWorldData } from '../core/world/DwarfFortressWorldGenerator';
+import { DwarfFortressRenderer, DFRenderConfig, DFRenderData } from '../core/world/DwarfFortressRenderer';
+import { PerformanceRenderer, PerformanceRenderConfig, PerformanceRenderData } from '../core/world/PerformanceRenderer';
+import { Minimap } from './Minimap';
 import './SimulationView.css';
 
 export interface SelectedEntity {
-  type: 'agent' | 'city' | 'region' | 'structure' | 'resource';
+  type: 'agent' | 'settlement' | 'civilization' | 'river' | 'lake' | 'cave';
   id: string;
   data: any;
   position: { x: number; y: number };
@@ -14,8 +15,9 @@ export interface SelectedEntity {
 
 export const SimulationView: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const worldRendererRef = useRef<EnhancedWorldRenderer | null>(null);
-  const cameraCenteredRef = useRef(false); // <-- add this line
+  const rendererRef = useRef<PerformanceRenderer | null>(null);
+  const worldDataRef = useRef<DFWorldData | null>(null);
+  const cameraCenteredRef = useRef(false);
   const { 
     engine,
     state, 
@@ -29,29 +31,35 @@ export const SimulationView: React.FC = () => {
     setSpeed 
   } = useSimulation();
   
-  // LIFTED CONFIG STATE
-  const [config, setConfig] = useState({
-    worldSize: { width: 1000, height: 1000 },
-    maxAgents: 1000,
-    maxFactions: 10,
-    difficulty: 0.5,
-    realism: 0.7,
-    chaos: 0.3,
-    timeScale: 1.0,
-    temperatureRange: { min: 0.1, max: 0.9 },
-    rainfallRange: { min: 0.2, max: 0.9 },
-    growingSeason: { start: 60, end: 300 },
-    threatLevel: 0.5,
-    fertilityVariation: 0.3,
-    resourceRichness: 0.7,
-    continentCount: 3,
-    mountainRanges: 5,
-    riverCount: 15,
-    lakeCount: 8,
-    politicalRegions: 8,
-    cityCount: 20,
-    roadDensity: 0.3,
+  // Dwarf Fortress configuration
+  const [config, setConfig] = useState<DwarfFortressConfig>({
+    width: 200,
+    height: 200,
+    seed: Math.floor(Math.random() * 1000000),
+    // World generation parameters
+    elevationScale: 0.02,
+    temperatureScale: 0.03,
+    rainfallScale: 0.025,
+    // New parameters for improved world generation
+    seaLevel: 0.45, // Creates more land than water
+    continentCount: 3, // Number of major continents
+    islandDensity: 0.4, // Density of smaller islands
+    // Feature generation
+    mountainRanges: 3,
+    riverCount: 8,
+    lakeCount: 5,
+    forestDensity: 0.4,
+    caveSystems: 4,
+    // Civilization parameters
+    civilizationCount: 3,
+    settlementDensity: 0.6,
+    roadDensity: 0.4,
+    // Resource parameters
+    mineralRichness: 0.3,
+    soilFertility: 0.5,
+    waterAvailability: 0.4,
   });
+  
   const [showConfig, setShowConfig] = useState(!state);
   const [selectedEntity, setSelectedEntity] = useState<SelectedEntity | null>(null);
   const [toolbarStates, setToolbarStates] = useState({
@@ -61,115 +69,293 @@ export const SimulationView: React.FC = () => {
     settings: false,
   });
   const [renderOptions, setRenderOptions] = useState({
-    showGrid: true,
+    showGrid: false,
     showResources: true,
     showStructures: true,
     showAgents: true,
-    showFactions: true,
-    showTerrain: true,
-    showPoliticalRegions: true,
-    showCities: true,
     showRivers: true,
-    showLakes: true,
     showRoads: true,
+    showSettlements: true,
+    showLabels: false,
+    // New layer options
+    showBiomeColors: true,
+    showSoilQuality: false,
+    showFireEffects: true,
+    showVegetationDensity: false,
+    showErosion: false,
+    // Performance options
+    enableOctrees: true,
+    maxVisibleTiles: 10000,
+    resourceVisibilityThreshold: 0.3,
   });
-  const [speed, setSpeedState] = useState(1.0); // Restore speed state
+  const [speed, setSpeedState] = useState(1.0);
 
-  // Initialize world renderer (only on mount or when config changes)
+  // Camera state management
+  const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 1 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+
+  // Initialize world generator and renderer
   useEffect(() => {
     if (showConfig) return; // Don't create renderer until simulation starts
+    
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     // Set canvas size to full viewport
     const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight - 60; // Account for top bar
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+      
+      // Update renderer with new canvas size
+      if (rendererRef.current) {
+        rendererRef.current.resize(canvas.width, canvas.height);
+      }
     };
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
 
-    // Generate world using FMG algorithms
-    console.log('🎮 Starting FMG world generation...');
-    const fmgGenerator = new FMGWorldGenerator(
-      config.worldSize.width,
-      config.worldSize.height,
-      10000, // cell count
-      Math.floor(Math.random() * 1000000), // random seed
-      config // Pass the full configuration
-    );
+    // Generate Dwarf Fortress world
+    console.log('🏔️ Starting Dwarf Fortress world generation...');
+    const worldGenerator = new DwarfFortressWorldGenerator(config);
+    const worldData = worldGenerator.generate();
+    worldDataRef.current = worldData;
     
-    const worldData = fmgGenerator.generate();
+    console.log('✅ Dwarf Fortress world generated:', {
+      tiles: worldData.tiles?.length || 0,
+      civilizations: worldData.civilizations?.length || 0,
+      settlements: worldData.settlements?.length || 0,
+      rivers: worldData.rivers?.length || 0,
+      lakes: worldData.lakes?.length || 0,
+      caves: worldData.caves?.length || 0,
+      roads: worldData.roads?.length || 0
+    });
     
-    // Use config from state for renderer
-    const rendererConfig: MultiScaleConfig = {
-      worldZoom: 0.1,
-      regionZoom: 0.5,
-      townZoom: 2,
-      cityZoom: 5,
-      worldSize: config.worldSize,
-      tileSize: 10,
-      biomeComplexity: config.realism,
-      continentCount: config.continentCount,
-      mountainRanges: config.mountainRanges,
-      riverCount: config.riverCount,
-      townDensity: 0.2,
-      maxTownSize: 100,
-      roadDensity: config.roadDensity,
+    // Create Performance renderer with optimizations
+    const renderConfig: PerformanceRenderConfig = {
+      tileSize: 12,
+      fontSize: 14,
+      fontFamily: 'monospace',
+      showAgents: renderOptions.showAgents,
+      showStructures: renderOptions.showStructures,
+      showResources: renderOptions.showResources,
+      showRivers: renderOptions.showRivers,
+      showRoads: renderOptions.showRoads,
+      showSettlements: renderOptions.showSettlements,
+      showGrid: renderOptions.showGrid,
+      showLabels: renderOptions.showLabels,
+      colorScheme: 'classic',
+      // Performance options
+      enableGreedyMeshing: true, // Always enabled for better performance
+      enableOctrees: renderOptions.enableOctrees,
+      maxVisibleTiles: renderOptions.maxVisibleTiles,
+      resourceVisibilityThreshold: renderOptions.resourceVisibilityThreshold,
+      // New layer options
+      showBiomeColors: renderOptions.showBiomeColors,
+      showSoilQuality: renderOptions.showSoilQuality,
+      showFireEffects: renderOptions.showFireEffects,
+      showVegetationDensity: renderOptions.showVegetationDensity,
+      showErosion: renderOptions.showErosion
     };
     
-    // Create renderer with FMG world data
-    worldRendererRef.current = new EnhancedWorldRenderer(canvas, rendererConfig, worldData);
-    
-    // Store world data for simulation engine to use
-    console.log('✅ FMG world data generated:', worldData);
+    rendererRef.current = new PerformanceRenderer(renderConfig);
+    rendererRef.current.setCanvas(canvas);
 
     return () => {
       window.removeEventListener('resize', resizeCanvas);
-      if (worldRendererRef.current) {
-        worldRendererRef.current = null;
+      if (rendererRef.current) {
+        rendererRef.current = null;
       }
     };
   }, [showConfig, config]);
 
-  // Center camera ONCE when state becomes available
+  // Center camera ONCE when world data becomes available
   useEffect(() => {
     if (
       !cameraCenteredRef.current &&
-      state &&
-      worldRendererRef.current
+      worldDataRef.current &&
+      rendererRef.current &&
+      canvasRef.current
     ) {
-      worldRendererRef.current.setCamera(
-        state.worldSize.width / 2,
-        state.worldSize.height / 2,
-        1
-      );
+      // Calculate zoom level to fit entire world in viewport
+      const canvas = canvasRef.current;
+      const worldWidth = config.width;
+      const worldHeight = config.height;
+      
+      // Calculate zoom levels needed to fit world in viewport
+      const zoomX = canvas.width / (worldWidth * 12); // 12 is tileSize
+      const zoomY = canvas.height / (worldHeight * 12);
+      
+      // Use the smaller zoom to ensure entire world fits
+      const fitZoom = Math.min(zoomX, zoomY) * 0.95; // 95% to add some margin
+      
+      // Center camera on the middle of the world
+      setCamera({
+        x: worldWidth / 2,
+        y: worldHeight / 2,
+        zoom: fitZoom
+      });
       cameraCenteredRef.current = true;
+      
+      console.log('🎯 Camera set to show entire world:', {
+        worldSize: { width: worldWidth, height: worldHeight },
+        canvasSize: { width: canvas.width, height: canvas.height },
+        calculatedZoom: fitZoom,
+        zoomX,
+        zoomY
+      });
     }
-  }, [state]);
+  }, [worldDataRef.current, config.width, config.height]);
 
-  // Canvas rendering
+  // Camera controls
   useEffect(() => {
-    const renderer = worldRendererRef.current;
-    if (!renderer) return;
-    // Map renderOptions from UI to EnhancedWorldRenderer's RenderOptions
-    renderer.setRenderOptions({
-      showPoliticalRegions: renderOptions.showPoliticalRegions,
-      showCities: renderOptions.showCities,
-      showRivers: renderOptions.showRivers,
-      showLakes: renderOptions.showLakes,
-      showRoads: renderOptions.showRoads,
-      // The rest use EnhancedWorldRenderer defaults
-    });
-  }, [renderOptions]);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
-  // Continuous rendering loop for smooth camera controls
+    const handleMouseDown = (e: MouseEvent) => {
+      if (e.button === 0) { // Left mouse button
+        setIsDragging(true);
+        setDragStart({ x: e.clientX, y: e.clientY });
+      }
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isDragging) {
+        // Calculate delta in world coordinates
+        const deltaX = (e.clientX - dragStart.x) / camera.zoom;
+        const deltaY = (e.clientY - dragStart.y) / camera.zoom;
+        
+        setCamera(currentCamera => {
+          const newX = currentCamera.x - deltaX;
+          const newY = currentCamera.y - deltaY;
+          
+          // Keep camera within world bounds
+          const maxX = config.width;
+          const maxY = config.height;
+          const minX = 0;
+          const minY = 0;
+          
+          return {
+            ...currentCamera,
+            x: Math.max(minX, Math.min(maxX, newX)),
+            y: Math.max(minY, Math.min(maxY, newY))
+          };
+        });
+        
+        setDragStart({ x: e.clientX, y: e.clientY });
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+      const newZoom = Math.max(0.1, Math.min(5, camera.zoom * zoomFactor));
+      
+      // Zoom towards mouse position
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      
+      // Convert mouse position to world coordinates
+      const worldX = (mouseX - canvas.width / 2) / camera.zoom + camera.x;
+      const worldY = (mouseY - canvas.height / 2) / camera.zoom + camera.y;
+      
+      // Calculate new camera position to keep mouse point fixed
+      setCamera(prev => ({
+        x: worldX - (mouseX - canvas.width / 2) / newZoom,
+        y: worldY - (mouseY - canvas.height / 2) / newZoom,
+        zoom: newZoom
+      }));
+    };
+
+    canvas.addEventListener('mousedown', handleMouseDown);
+    canvas.addEventListener('mousemove', handleMouseMove);
+    canvas.addEventListener('mouseup', handleMouseUp);
+    canvas.addEventListener('wheel', handleWheel);
+    
+    return () => {
+      canvas.removeEventListener('mousedown', handleMouseDown);
+      canvas.removeEventListener('mousemove', handleMouseMove);
+      canvas.removeEventListener('mouseup', handleMouseUp);
+      canvas.removeEventListener('wheel', handleWheel);
+    };
+  }, [isDragging, dragStart, camera]);
+
+  // Continuous rendering loop
   useEffect(() => {
-    const renderer = worldRendererRef.current;
-    if (!renderer) return;
+    const renderer = rendererRef.current;
+    const worldData = worldDataRef.current;
+    if (!renderer || !worldData) {
+      return;
+    }
+    
     let animationId: number;
     const renderLoop = () => {
-      renderer.render();
+      // Update renderer config with current options
+      const renderConfig: PerformanceRenderConfig = {
+        tileSize: 12,
+        fontSize: 14,
+        fontFamily: 'monospace',
+        showAgents: renderOptions.showAgents,
+        showStructures: renderOptions.showStructures,
+        showResources: renderOptions.showResources,
+        showRivers: renderOptions.showRivers,
+        showRoads: renderOptions.showRoads,
+        showSettlements: renderOptions.showSettlements,
+        showGrid: renderOptions.showGrid,
+        showLabels: renderOptions.showLabels,
+        colorScheme: 'classic',
+        // Performance options
+        enableGreedyMeshing: true, // Always enabled for better performance
+        enableOctrees: renderOptions.enableOctrees,
+        maxVisibleTiles: renderOptions.maxVisibleTiles,
+        resourceVisibilityThreshold: renderOptions.resourceVisibilityThreshold,
+        // New layer options
+        showBiomeColors: renderOptions.showBiomeColors,
+        showSoilQuality: renderOptions.showSoilQuality,
+        showFireEffects: renderOptions.showFireEffects,
+        showVegetationDensity: renderOptions.showVegetationDensity,
+        showErosion: renderOptions.showErosion
+      };
+      
+      renderer['config'] = renderConfig;
+      
+      // Get road data from RoadManager
+      const roadManager = engine?.getRoadManager();
+      const roads = roadManager?.getRoads() || [];
+      
+      // Update world data with roads from RoadManager
+      const worldDataWithRoads = {
+        ...worldData,
+        roads: roads
+      };
+      
+      // Create render data
+      const renderData: PerformanceRenderData = {
+        worldData: worldDataWithRoads,
+        agents: engine?.getAgentData() || [],
+        zoomLevel: camera.zoom,
+        centerX: camera.x,
+        centerY: camera.y,
+        viewportWidth: canvasRef.current?.width || 800,
+        viewportHeight: canvasRef.current?.height || 600
+      };
+      
+      // Ensure camera is within world bounds
+      const clampedX = Math.max(0, Math.min(config.width, camera.x));
+      const clampedY = Math.max(0, Math.min(config.height, camera.y));
+      
+      if (clampedX !== camera.x || clampedY !== camera.y) {
+        setCamera(prev => ({ ...prev, x: clampedX, y: clampedY }));
+        return; // Skip this render frame, let the camera update
+      }
+      
+      renderer.render(renderData);
       animationId = requestAnimationFrame(renderLoop);
     };
     renderLoop();
@@ -178,9 +364,9 @@ export const SimulationView: React.FC = () => {
         cancelAnimationFrame(animationId);
       }
     };
-  }, [state]);
+  }, [worldDataRef.current, camera, engine, renderOptions]);
 
-  // Handle canvas click events for entity selection (with delay to avoid conflicts)
+  // Handle canvas click events for entity selection
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -188,28 +374,22 @@ export const SimulationView: React.FC = () => {
     let clickTimeout: NodeJS.Timeout;
 
     const handleCanvasClick = (e: MouseEvent) => {
-      // Add a small delay to avoid conflicts with drag events
       clickTimeout = setTimeout(() => {
         const rect = canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
         
         // Convert screen coordinates to world coordinates
-        const renderer = worldRendererRef.current;
-        if (!renderer) return;
-        
-        const camera = renderer.getCamera();
         const worldX = (x - canvas.width / 2) / camera.zoom + camera.x;
         const worldY = (y - canvas.height / 2) / camera.zoom + camera.y;
         
         // Find entity at click position
         const entity = findEntityAtPosition(worldX, worldY);
         setSelectedEntity(entity);
-      }, 150); // 150ms delay to distinguish from drag
+      }, 150);
     };
 
     const handleMouseDown = () => {
-      // Clear any pending click timeout when mouse down occurs
       if (clickTimeout) {
         clearTimeout(clickTimeout);
       }
@@ -225,39 +405,37 @@ export const SimulationView: React.FC = () => {
         clearTimeout(clickTimeout);
       }
     };
-  }, []);
+  }, [camera]);
 
   const findEntityAtPosition = (x: number, y: number): SelectedEntity | null => {
-    const worldManager = engine?.getWorldManager?.();
-    if (!worldManager) return null;
+    const worldData = worldDataRef.current;
+    if (!worldData) return null;
 
-    // Check cities
-    const cities = worldManager.getCities();
-    for (const city of cities) {
-      const distance = Math.sqrt((x - city.x) ** 2 + (y - city.y) ** 2);
-      if (distance < 50) {
+    // Check settlements
+    const settlements = worldData.settlements || [];
+    for (const settlement of settlements) {
+      const distance = Math.sqrt((x - settlement.position.x) ** 2 + (y - settlement.position.y) ** 2);
+      if (distance < 2) {
         return {
-          type: 'city',
-          id: city.name,
-          data: city,
-          position: { x: city.x, y: city.y }
+          type: 'settlement',
+          id: settlement.id,
+          data: settlement,
+          position: settlement.position
         };
       }
     }
 
-    // Check political regions
-    const regions = worldManager.getPoliticalRegions();
-    for (const region of regions) {
-      for (const territory of region.territory) {
-        if (x >= territory.x && x <= territory.x + territory.width &&
-            y >= territory.y && y <= territory.y + territory.height) {
-          return {
-            type: 'region',
-            id: region.name,
-            data: region,
-            position: { x: territory.x + territory.width / 2, y: territory.y + territory.height / 2 }
-          };
-        }
+    // Check civilizations
+    const civilizations = worldData.civilizations || [];
+    for (const civ of civilizations) {
+      const distance = Math.sqrt((x - civ.capital.x) ** 2 + (y - civ.capital.y) ** 2);
+      if (distance < 5) {
+        return {
+          type: 'civilization',
+          id: civ.id,
+          data: civ,
+          position: civ.capital
+        };
       }
     }
 
@@ -265,7 +443,7 @@ export const SimulationView: React.FC = () => {
     const agents = engine?.getAgentData() || [];
     for (const agent of agents) {
       const distance = Math.sqrt((x - agent.position.x) ** 2 + (y - agent.position.y) ** 2);
-      if (distance < 10) {
+      if (distance < 1) {
         return {
           type: 'agent',
           id: agent.id,
@@ -278,10 +456,10 @@ export const SimulationView: React.FC = () => {
     return null;
   };
 
-  const handleRenderOptionChange = (option: string, value: boolean) => {
+  const handleRenderOptionChange = (option: string, value: boolean | number): void => {
     setRenderOptions(prev => ({
       ...prev,
-      [option]: value,
+      [option]: value
     }));
   };
 
@@ -297,27 +475,122 @@ export const SimulationView: React.FC = () => {
     }));
   };
 
+  const handleStartRandomFire = () => {
+    if (!worldDataRef.current) return;
+    
+    // Find a random tile with vegetation to start a fire
+    const tiles = worldDataRef.current.tiles;
+    const candidates: { x: number; y: number }[] = [];
+    
+    for (let y = 0; y < tiles.length; y++) {
+      const row = tiles[y];
+      if (!row) continue;
+      
+      for (let x = 0; x < row.length; x++) {
+        const tile = row[x];
+        if (tile && tile.vegetationDensity > 0.3 && tile.fireState === 'none') {
+          candidates.push({ x, y });
+        }
+      }
+    }
+    
+    if (candidates.length > 0) {
+      const randomTile = candidates[Math.floor(Math.random() * candidates.length)];
+      // We need to access the world generator to start the fire
+      // For now, we'll just log the position
+      console.log('Starting fire at:', randomTile);
+    }
+  };
+
+  const handleUpdateTileStates = () => {
+    if (!worldDataRef.current) return;
+    
+    // Update tile states (fire spreading, etc.)
+    console.log('Updating tile states...');
+    // This would call the world generator's updateTileStates method
+    // For now, we'll just log
+  };
+
+  // Debug function to log camera state
+  const logCameraState = () => {
+    console.log('Camera State:', {
+      x: camera.x,
+      y: camera.y,
+      zoom: camera.zoom,
+      worldSize: { width: config.width, height: config.height },
+      viewport: {
+        width: canvasRef.current?.width || 800,
+        height: canvasRef.current?.height || 600
+      }
+    });
+  };
+
+  const handleAnalyzeRoadNeeds = () => {
+    const roadManager = engine?.getRoadManager();
+    if (roadManager && worldDataRef.current?.settlements) {
+      roadManager.analyzeSettlementNeeds(worldDataRef.current.settlements);
+      console.log('🛣️ Road needs analyzed');
+      console.log('📋 Available projects:', roadManager.getAvailableProjects());
+    } else {
+      console.log('⚠️ No road manager or settlements available');
+    }
+  };
+
+  const handleShowRoadProjects = () => {
+    const roadManager = engine?.getRoadManager();
+    if (roadManager) {
+      const projects = roadManager.getRoadProjects();
+      const available = roadManager.getAvailableProjects();
+      console.log('📋 All road projects:', projects);
+      console.log('🚧 Available projects:', available);
+    } else {
+      console.log('⚠️ No road manager available');
+    }
+  };
+
+  const handleCreateTestRoad = () => {
+    const roadManager = engine?.getRoadManager();
+    if (roadManager) {
+      // Create a simple test road
+      const testRoad = {
+        id: 'test_road_1',
+        name: 'Test Road',
+        points: [
+          { x: 50, y: 50 },
+          { x: 100, y: 100 }
+        ],
+        width: 2,
+        type: 'dirt' as const,
+        condition: 1.0,
+        settlements: []
+      };
+      roadManager.addRoad(testRoad);
+      console.log('🚧 Test road created');
+    } else {
+      console.log('⚠️ No road manager available');
+    }
+  };
+
   const handleStartSimulation = () => {
     setShowConfig(false);
     
     // Update simulation settings with config
     if (engine) {
       engine.updateSettings({
-        timeScale: config.timeScale,
-        maxAgents: config.maxAgents,
-        maxFactions: config.maxFactions,
-        difficulty: config.difficulty,
-        realism: config.realism,
-        chaos: config.chaos,
+        timeScale: 1.0,
+        maxAgents: 100,
+        maxFactions: config.civilizationCount,
+        difficulty: 0.5,
+        realism: 0.7,
+        chaos: 0.3,
       });
     }
     
-    // Renderer will be created with config by useEffect above
     start();
   };
 
   if (showConfig) {
-    return <GameConfigPanel config={config} setConfig={setConfig} onStart={handleStartSimulation} />;
+    return <DwarfFortressConfigPanel config={config} setConfig={setConfig} onStart={handleStartSimulation} />;
   }
 
   return (
@@ -371,6 +644,53 @@ export const SimulationView: React.FC = () => {
                 <button onClick={() => handleSpeedChange(1.0)} disabled={!isRunning}>1x</button>
                 <button onClick={() => handleSpeedChange(2.0)} disabled={!isRunning}>2x</button>
               </div>
+
+              <div className="control-group">
+                <button 
+                  className="control-btn"
+                  onClick={() => {
+                    if (canvasRef.current && worldDataRef.current) {
+                      const canvas = canvasRef.current;
+                      const worldWidth = config.width;
+                      const worldHeight = config.height;
+                      
+                      // Calculate zoom level to fit entire world in viewport
+                      const zoomX = canvas.width / (worldWidth * 12);
+                      const zoomY = canvas.height / (worldHeight * 12);
+                      const fitZoom = Math.min(zoomX, zoomY) * 0.95;
+                      
+                      setCamera({
+                        x: worldWidth / 2,
+                        y: worldHeight / 2,
+                        zoom: fitZoom
+                      });
+                      
+                      console.log('🎯 Show Full Map clicked:', {
+                        worldSize: { width: worldWidth, height: worldHeight },
+                        canvasSize: { width: canvas.width, height: canvas.height },
+                        calculatedZoom: fitZoom
+                      });
+                    }
+                  }}
+                  disabled={!state}
+                >
+                  🗺️ Show Full Map
+                </button>
+                
+                <button 
+                  className="control-btn"
+                  onClick={() => {
+                    setCamera({
+                      x: config.width / 2,
+                      y: config.height / 2,
+                      zoom: 1.0
+                    });
+                  }}
+                  disabled={!state}
+                >
+                  🎯 Recenter
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -386,15 +706,76 @@ export const SimulationView: React.FC = () => {
           {toolbarStates.tools && (
             <div className="toolbar-panel">
               <div className="render-options">
+                <h4>Basic Layers</h4>
                 <label><input type="checkbox" checked={renderOptions.showGrid} onChange={(e) => handleRenderOptionChange('showGrid', e.target.checked)} /> Grid</label>
                 <label><input type="checkbox" checked={renderOptions.showAgents} onChange={(e) => handleRenderOptionChange('showAgents', e.target.checked)} /> Agents</label>
                 <label><input type="checkbox" checked={renderOptions.showStructures} onChange={(e) => handleRenderOptionChange('showStructures', e.target.checked)} /> Structures</label>
                 <label><input type="checkbox" checked={renderOptions.showResources} onChange={(e) => handleRenderOptionChange('showResources', e.target.checked)} /> Resources</label>
-                <label><input type="checkbox" checked={renderOptions.showPoliticalRegions} onChange={(e) => handleRenderOptionChange('showPoliticalRegions', e.target.checked)} /> Regions</label>
-                <label><input type="checkbox" checked={renderOptions.showCities} onChange={(e) => handleRenderOptionChange('showCities', e.target.checked)} /> Cities</label>
                 <label><input type="checkbox" checked={renderOptions.showRivers} onChange={(e) => handleRenderOptionChange('showRivers', e.target.checked)} /> Rivers</label>
-                <label><input type="checkbox" checked={renderOptions.showLakes} onChange={(e) => handleRenderOptionChange('showLakes', e.target.checked)} /> Lakes</label>
                 <label><input type="checkbox" checked={renderOptions.showRoads} onChange={(e) => handleRenderOptionChange('showRoads', e.target.checked)} /> Roads</label>
+                <label><input type="checkbox" checked={renderOptions.showSettlements} onChange={(e) => handleRenderOptionChange('showSettlements', e.target.checked)} /> Settlements</label>
+                <label><input type="checkbox" checked={renderOptions.showLabels} onChange={(e) => handleRenderOptionChange('showLabels', e.target.checked)} /> Labels</label>
+                
+                <h4>Environmental Layers</h4>
+                <label><input type="checkbox" checked={renderOptions.showBiomeColors} onChange={(e) => handleRenderOptionChange('showBiomeColors', e.target.checked)} /> Biome Colors</label>
+                <label><input type="checkbox" checked={renderOptions.showSoilQuality} onChange={(e) => handleRenderOptionChange('showSoilQuality', e.target.checked)} /> Soil Quality</label>
+                <label><input type="checkbox" checked={renderOptions.showFireEffects} onChange={(e) => handleRenderOptionChange('showFireEffects', e.target.checked)} /> Fire Effects</label>
+                <label><input type="checkbox" checked={renderOptions.showVegetationDensity} onChange={(e) => handleRenderOptionChange('showVegetationDensity', e.target.checked)} /> Vegetation Density</label>
+                <label><input type="checkbox" checked={renderOptions.showErosion} onChange={(e) => handleRenderOptionChange('showErosion', e.target.checked)} /> Erosion</label>
+                
+                <h4>Performance Options</h4>
+                <label><input type="checkbox" checked={true} disabled /> Greedy Meshing (Always Enabled)</label>
+                <label><input type="checkbox" checked={renderOptions.enableOctrees} onChange={(e) => handleRenderOptionChange('enableOctrees', e.target.checked)} /> Octree Optimization</label>
+                <label>
+                  Resource Visibility: 
+                  <input 
+                    type="range" 
+                    min="0" 
+                    max="1" 
+                    step="0.1" 
+                    value={renderOptions.resourceVisibilityThreshold} 
+                    onChange={(e) => handleRenderOptionChange('resourceVisibilityThreshold', parseFloat(e.target.value))}
+                    style={{width: '60px', marginLeft: '8px'}}
+                  />
+                  {renderOptions.resourceVisibilityThreshold.toFixed(1)}
+                </label>
+                <label>
+                  Max Visible Tiles: 
+                  <input 
+                    type="range" 
+                    min="1000" 
+                    max="50000" 
+                    step="1000" 
+                    value={renderOptions.maxVisibleTiles} 
+                    onChange={(e) => handleRenderOptionChange('maxVisibleTiles', parseInt(e.target.value))}
+                    style={{width: '60px', marginLeft: '8px'}}
+                  />
+                  {renderOptions.maxVisibleTiles.toLocaleString()}
+                </label>
+              </div>
+              
+              <div className="world-tools">
+                <h4>World Tools</h4>
+                <button onClick={handleStartRandomFire} className="tool-btn">
+                  🔥 Start Random Fire
+                </button>
+                <button onClick={handleUpdateTileStates} className="tool-btn">
+                  ⏰ Update Environment
+                </button>
+                <button onClick={logCameraState} className="tool-btn">
+                  🐛 Debug Camera
+                </button>
+                
+                <h4>Road Management</h4>
+                <button onClick={handleAnalyzeRoadNeeds} className="tool-btn">
+                  🛣️ Analyze Road Needs
+                </button>
+                <button onClick={handleShowRoadProjects} className="tool-btn">
+                  📋 Show Road Projects
+                </button>
+                <button onClick={handleCreateTestRoad} className="tool-btn">
+                  🚧 Create Test Road
+                </button>
               </div>
             </div>
           )}
@@ -447,7 +828,7 @@ export const SimulationView: React.FC = () => {
           {toolbarStates.settings && (
             <div className="toolbar-panel">
               <button onClick={() => setShowConfig(true)} className="config-btn">
-                🔧 Game Configuration
+                🔧 World Configuration
               </button>
               <button onClick={() => window.location.reload()} className="reset-btn">
                 🔄 Reset Simulation
@@ -464,10 +845,92 @@ export const SimulationView: React.FC = () => {
           className="simulation-canvas"
         />
         
+        {/* Camera Info Display */}
+        <div className="camera-info">
+          <div className="camera-stat">
+            <span>X: {Math.round(camera.x)}</span>
+          </div>
+          <div className="camera-stat">
+            <span>Y: {Math.round(camera.y)}</span>
+          </div>
+          <div className="camera-stat">
+            <span>Zoom: {camera.zoom.toFixed(2)}x</span>
+          </div>
+        </div>
+        
+        {/* Camera Instructions */}
+        <div className="camera-instructions">
+          <p>🖱️ Drag to pan • 🖱️ Scroll to zoom • 🖱️ Click to select</p>
+        </div>
+        
+        {/* Camera Controls */}
+        <div className="camera-controls">
+          <button 
+            className="recenter-btn"
+            onClick={() => {
+              if (worldDataRef.current && config.width && config.height) {
+                setCamera({
+                  x: config.width / 2,
+                  y: config.height / 2,
+                  zoom: 1.0
+                });
+                console.log('🎯 Camera recentered');
+              }
+            }}
+            title="Recenter camera on world"
+          >
+            🎯 Recenter
+          </button>
+
+        </div>
+        
+        {/* Dwarf Fortress Legend */}
+        <div className="ascii-legend">
+          <h4>Dwarf Fortress Legend:</h4>
+          <div className="legend-grid">
+            <div className="legend-item"><span className="legend-char">.</span> Grass</div>
+            <div className="legend-item"><span className="legend-char">♣</span> Forest</div>
+            <div className="legend-item"><span className="legend-char">^</span> Mountain</div>
+            <div className="legend-item"><span className="legend-char">~</span> Water</div>
+            <div className="legend-item"><span className="legend-char">·</span> Desert</div>
+            <div className="legend-item"><span className="legend-char">#</span> Urban</div>
+            <div className="legend-item"><span className="legend-char">≈</span> Farm</div>
+            <div className="legend-item"><span className="legend-char">=</span> Road</div>
+            <div className="legend-item"><span className="legend-char">n</span> Hills</div>
+            <div className="legend-item"><span className="legend-char">†</span> Ruins</div>
+            <div className="legend-item"><span className="legend-char">◊</span> Capital</div>
+            <div className="legend-item"><span className="legend-char">$</span> Trade Hub</div>
+            <div className="legend-item"><span className="legend-char">⌂</span> Building</div>
+            <div className="legend-item"><span className="legend-char">☩</span> Temple</div>
+            <div className="legend-item"><span className="legend-char">@</span> Agent</div>
+          </div>
+        </div>
+        
+        {/* Minimap */}
+        {worldDataRef.current && (
+          <Minimap
+            tiles={worldDataRef.current.tiles || []}
+            camera={camera}
+            worldSize={{ width: config.width, height: config.height }}
+            viewportSize={{ 
+              width: canvasRef.current?.width || 800, 
+              height: canvasRef.current?.height || 600 
+            }}
+            onMinimapClick={(x, y) => {
+              setCamera({
+                x,
+                y,
+                zoom: 1.0
+              });
+              console.log('🎯 Camera moved to:', { x, y });
+            }}
+          />
+        )}
+        
         {!state && (
           <div className="loading-overlay">
             <div className="loading-spinner"></div>
-            <p>Initializing simulation...</p>
+            <p>Initializing Dwarf Fortress simulation...</p>
           </div>
         )}
       </div>
@@ -483,207 +946,66 @@ export const SimulationView: React.FC = () => {
   );
 };
 
-// Game Configuration Panel Component
-interface GameConfigPanelProps {
-  config: any;
-  setConfig: React.Dispatch<React.SetStateAction<any>>;
+// Dwarf Fortress Configuration Panel Component
+interface DwarfFortressConfigPanelProps {
+  config: DwarfFortressConfig;
+  setConfig: React.Dispatch<React.SetStateAction<DwarfFortressConfig>>;
   onStart: () => void;
 }
 
-const GameConfigPanel: React.FC<GameConfigPanelProps> = ({ config, setConfig, onStart }) => {
-  const handleConfigChange = (key: string, value: any) => {
-    setConfig((prev: any) => ({
+const DwarfFortressConfigPanel: React.FC<DwarfFortressConfigPanelProps> = ({ config, setConfig, onStart }) => {
+  const handleConfigChange = (key: keyof DwarfFortressConfig, value: any) => {
+    setConfig((prev) => ({
       ...prev,
       [key]: value,
-    }));
-  };
-
-  const handleNestedConfigChange = (parentKey: string, childKey: string, value: any) => {
-    setConfig((prev: any) => ({
-      ...prev,
-      [parentKey]: {
-        ...(prev[parentKey as keyof typeof prev] as any || {}),
-        [childKey]: value,
-      },
     }));
   };
 
   return (
     <div className="game-config-overlay">
       <div className="game-config-panel">
-        <h2>🎮 RimWorld-Style Configuration</h2>
+        <h2>🏔️ Dwarf Fortress World Configuration</h2>
         
         <div className="config-section">
           <h3>World Settings</h3>
           <div className="config-group">
-            <label>World Width:</label>
-            <input 
-              type="number" 
-              value={config.worldSize.width}
-              onChange={(e) => handleNestedConfigChange('worldSize', 'width', parseInt(e.target.value))}
-              min="500" max="2000" step="100"
-            />
-          </div>
-          <div className="config-group">
-            <label>World Height:</label>
-            <input 
-              type="number" 
-              value={config.worldSize.height}
-              onChange={(e) => handleNestedConfigChange('worldSize', 'height', parseInt(e.target.value))}
-              min="500" max="2000" step="100"
-            />
-          </div>
-          <div className="config-group">
-            <label>Continent Count: {config.continentCount}</label>
+            <label>World Width: {config.width}</label>
             <input 
               type="range" 
-              value={config.continentCount}
-              onChange={(e) => handleConfigChange('continentCount', parseInt(e.target.value))}
-              min="1" max="8" step="1"
+              value={config.width}
+              onChange={(e) => handleConfigChange('width', parseInt(e.target.value))}
+              min="100" max="400" step="50"
             />
           </div>
+          <div className="config-group">
+            <label>World Height: {config.height}</label>
+            <input 
+              type="range" 
+              value={config.height}
+              onChange={(e) => handleConfigChange('height', parseInt(e.target.value))}
+              min="100" max="400" step="50"
+            />
+          </div>
+          <div className="config-group">
+            <label>Seed: {config.seed}</label>
+            <input 
+              type="number" 
+              value={config.seed}
+              onChange={(e) => handleConfigChange('seed', parseInt(e.target.value))}
+              min="0" max="999999"
+            />
+          </div>
+        </div>
+
+        <div className="config-section">
+          <h3>Terrain Generation</h3>
           <div className="config-group">
             <label>Mountain Ranges: {config.mountainRanges}</label>
             <input 
               type="range" 
               value={config.mountainRanges}
               onChange={(e) => handleConfigChange('mountainRanges', parseInt(e.target.value))}
-              min="1" max="10" step="1"
-            />
-          </div>
-        </div>
-
-        <div className="config-section">
-          <h3>Climate Settings</h3>
-          <div className="config-group">
-            <label>Temperature Range: {config.temperatureRange.min.toFixed(1)} - {config.temperatureRange.max.toFixed(1)}</label>
-            <div className="range-inputs">
-              <input 
-                type="range" 
-                value={config.temperatureRange.min}
-                onChange={(e) => handleNestedConfigChange('temperatureRange', 'min', parseFloat(e.target.value))}
-                min="0" max="1" step="0.1"
-              />
-              <input 
-                type="range" 
-                value={config.temperatureRange.max}
-                onChange={(e) => handleNestedConfigChange('temperatureRange', 'max', parseFloat(e.target.value))}
-                min="0" max="1" step="0.1"
-              />
-            </div>
-          </div>
-          <div className="config-group">
-            <label>Rainfall Range: {config.rainfallRange.min.toFixed(1)} - {config.rainfallRange.max.toFixed(1)}</label>
-            <div className="range-inputs">
-              <input 
-                type="range" 
-                value={config.rainfallRange.min}
-                onChange={(e) => handleNestedConfigChange('rainfallRange', 'min', parseFloat(e.target.value))}
-                min="0" max="1" step="0.1"
-              />
-              <input 
-                type="range" 
-                value={config.rainfallRange.max}
-                onChange={(e) => handleNestedConfigChange('rainfallRange', 'max', parseFloat(e.target.value))}
-                min="0" max="1" step="0.1"
-              />
-            </div>
-          </div>
-          <div className="config-group">
-            <label>Growing Season: {config.growingSeason.start} - {config.growingSeason.end} days</label>
-            <div className="range-inputs">
-              <input 
-                type="range" 
-                value={config.growingSeason.start}
-                onChange={(e) => handleNestedConfigChange('growingSeason', 'start', parseInt(e.target.value))}
-                min="0" max="365" step="10"
-              />
-              <input 
-                type="range" 
-                value={config.growingSeason.end}
-                onChange={(e) => handleNestedConfigChange('growingSeason', 'end', parseInt(e.target.value))}
-                min="0" max="365" step="10"
-              />
-            </div>
-          </div>
-        </div>
-
-        <div className="config-section">
-          <h3>Simulation Settings</h3>
-          <div className="config-group">
-            <label>Max Agents: {config.maxAgents}</label>
-            <input 
-              type="range" 
-              value={config.maxAgents}
-              onChange={(e) => handleConfigChange('maxAgents', parseInt(e.target.value))}
-              min="100" max="5000" step="100"
-            />
-          </div>
-          <div className="config-group">
-            <label>Max Factions: {config.maxFactions}</label>
-            <input 
-              type="range" 
-              value={config.maxFactions}
-              onChange={(e) => handleConfigChange('maxFactions', parseInt(e.target.value))}
-              min="2" max="20" step="1"
-            />
-          </div>
-          <div className="config-group">
-            <label>Difficulty: {config.difficulty}</label>
-            <input 
-              type="range" 
-              value={config.difficulty}
-              onChange={(e) => handleConfigChange('difficulty', parseFloat(e.target.value))}
-              min="0" max="1" step="0.1"
-            />
-          </div>
-          <div className="config-group">
-            <label>Threat Level: {config.threatLevel}</label>
-            <input 
-              type="range" 
-              value={config.threatLevel}
-              onChange={(e) => handleConfigChange('threatLevel', parseFloat(e.target.value))}
-              min="0" max="1" step="0.1"
-            />
-          </div>
-          <div className="config-group">
-            <label>Realism: {config.realism}</label>
-            <input 
-              type="range" 
-              value={config.realism}
-              onChange={(e) => handleConfigChange('realism', parseFloat(e.target.value))}
-              min="0" max="1" step="0.1"
-            />
-          </div>
-          <div className="config-group">
-            <label>Chaos: {config.chaos}</label>
-            <input 
-              type="range" 
-              value={config.chaos}
-              onChange={(e) => handleConfigChange('chaos', parseFloat(e.target.value))}
-              min="0" max="1" step="0.1"
-            />
-          </div>
-        </div>
-
-        <div className="config-section">
-          <h3>Resource Settings</h3>
-          <div className="config-group">
-            <label>Resource Richness: {config.resourceRichness}</label>
-            <input 
-              type="range" 
-              value={config.resourceRichness}
-              onChange={(e) => handleConfigChange('resourceRichness', parseFloat(e.target.value))}
-              min="0" max="1" step="0.1"
-            />
-          </div>
-          <div className="config-group">
-            <label>Fertility Variation: {config.fertilityVariation}</label>
-            <input 
-              type="range" 
-              value={config.fertilityVariation}
-              onChange={(e) => handleConfigChange('fertilityVariation', parseFloat(e.target.value))}
-              min="0" max="1" step="0.1"
+              min="1" max="8" step="1"
             />
           </div>
           <div className="config-group">
@@ -692,7 +1014,7 @@ const GameConfigPanel: React.FC<GameConfigPanelProps> = ({ config, setConfig, on
               type="range" 
               value={config.riverCount}
               onChange={(e) => handleConfigChange('riverCount', parseInt(e.target.value))}
-              min="5" max="30" step="1"
+              min="3" max="15" step="1"
             />
           </div>
           <div className="config-group">
@@ -701,32 +1023,85 @@ const GameConfigPanel: React.FC<GameConfigPanelProps> = ({ config, setConfig, on
               type="range" 
               value={config.lakeCount}
               onChange={(e) => handleConfigChange('lakeCount', parseInt(e.target.value))}
-              min="3" max="15" step="1"
+              min="2" max="10" step="1"
             />
           </div>
           <div className="config-group">
-            <label>City Count: {config.cityCount}</label>
+            <label>Cave Systems: {config.caveSystems}</label>
             <input 
               type="range" 
-              value={config.cityCount}
-              onChange={(e) => handleConfigChange('cityCount', parseInt(e.target.value))}
-              min="10" max="50" step="1"
+              value={config.caveSystems}
+              onChange={(e) => handleConfigChange('caveSystems', parseInt(e.target.value))}
+              min="1" max="8" step="1"
+            />
+          </div>
+        </div>
+
+        <div className="config-section">
+          <h3>Civilization Settings</h3>
+          <div className="config-group">
+            <label>Civilization Count: {config.civilizationCount}</label>
+            <input 
+              type="range" 
+              value={config.civilizationCount}
+              onChange={(e) => handleConfigChange('civilizationCount', parseInt(e.target.value))}
+              min="2" max="8" step="1"
             />
           </div>
           <div className="config-group">
-            <label>Road Density: {config.roadDensity}</label>
+            <label>Settlement Density: {config.settlementDensity.toFixed(1)}</label>
+            <input 
+              type="range" 
+              value={config.settlementDensity}
+              onChange={(e) => handleConfigChange('settlementDensity', parseFloat(e.target.value))}
+              min="0.1" max="1.0" step="0.1"
+            />
+          </div>
+          <div className="config-group">
+            <label>Road Density: {config.roadDensity.toFixed(1)}</label>
             <input 
               type="range" 
               value={config.roadDensity}
               onChange={(e) => handleConfigChange('roadDensity', parseFloat(e.target.value))}
-              min="0" max="1" step="0.1"
+              min="0.1" max="1.0" step="0.1"
+            />
+          </div>
+        </div>
+
+        <div className="config-section">
+          <h3>Resource Settings</h3>
+          <div className="config-group">
+            <label>Mineral Richness: {config.mineralRichness.toFixed(1)}</label>
+            <input 
+              type="range" 
+              value={config.mineralRichness}
+              onChange={(e) => handleConfigChange('mineralRichness', parseFloat(e.target.value))}
+              min="0.1" max="1.0" step="0.1"
+            />
+          </div>
+          <div className="config-group">
+            <label>Soil Fertility: {config.soilFertility.toFixed(1)}</label>
+            <input 
+              type="range" 
+              value={config.soilFertility}
+              onChange={(e) => handleConfigChange('soilFertility', parseFloat(e.target.value))}
+              min="0.1" max="1.0" step="0.1"
+            />
+          </div>
+          <div className="config-group">
+            <label>Water Availability: {config.waterAvailability.toFixed(1)}</label>
+            <input 
+              type="range" 
+              value={config.waterAvailability}
+              onChange={(e) => handleConfigChange('waterAvailability', parseFloat(e.target.value))}
+              min="0.1" max="1.0" step="0.1"
             />
           </div>
         </div>
 
         <div className="config-actions">
           <button onClick={onStart} className="start-btn">
-            🚀 Start RimWorld-Style Simulation
+            🚀 Start Dwarf Fortress Simulation
           </button>
         </div>
       </div>
@@ -763,39 +1138,51 @@ const EntityDetailsPanel: React.FC<{ entity: SelectedEntity; onClose: () => void
           </div>
         );
 
-      case 'city':
+      case 'settlement':
         return (
           <div className="entity-details">
-            <h3>🏙️ City: {entity.data.name}</h3>
+            <h3>🏘️ Settlement: {entity.data.name}</h3>
             <div className="detail-grid">
               <div className="detail-item">
-                <label>Size:</label>
-                <span>{entity.data.size}</span>
+                <label>Type:</label>
+                <span>{entity.data.type}</span>
               </div>
-              <div className="detail-item">
-                <label>Position:</label>
-                <span>({Math.round(entity.data.x)}, {Math.round(entity.data.y)})</span>
-              </div>
-            </div>
-          </div>
-        );
-
-      case 'region':
-        return (
-          <div className="entity-details">
-            <h3>🗺️ Region: {entity.data.name}</h3>
-            <div className="detail-grid">
               <div className="detail-item">
                 <label>Population:</label>
                 <span>{entity.data.population}</span>
               </div>
               <div className="detail-item">
-                <label>Resources:</label>
-                <span>{entity.data.resources.join(', ')}</span>
+                <label>Position:</label>
+                <span>({Math.round(entity.data.position.x)}, {Math.round(entity.data.position.y)})</span>
               </div>
               <div className="detail-item">
-                <label>Color:</label>
-                <span style={{ color: entity.data.color }}>■</span>
+                <label>Civilization:</label>
+                <span>{entity.data.civilization}</span>
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'civilization':
+        return (
+          <div className="entity-details">
+            <h3>🏛️ Civilization: {entity.data.name}</h3>
+            <div className="detail-grid">
+              <div className="detail-item">
+                <label>Type:</label>
+                <span>{entity.data.type}</span>
+              </div>
+              <div className="detail-item">
+                <label>Population:</label>
+                <span>{entity.data.population}</span>
+              </div>
+              <div className="detail-item">
+                <label>Technology:</label>
+                <span>{Math.round(entity.data.technology * 100)}%</span>
+              </div>
+              <div className="detail-item">
+                <label>Wealth:</label>
+                <span>{Math.round(entity.data.wealth * 100)}%</span>
               </div>
             </div>
           </div>

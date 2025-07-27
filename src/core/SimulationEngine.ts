@@ -2,12 +2,14 @@ import { EventEmitter } from 'events';
 import { AgentManager } from './agents/AgentManager';
 import { WorldManager } from './world/WorldManager';
 import { SocialManager } from './social/SocialManager';
+import { RoadManager } from './world/RoadManager';
 import { SimulationState } from '../types/simulation';
 
 export class SimulationEngine extends EventEmitter {
   private agentManager: AgentManager;
   private worldManager: WorldManager;
   private socialManager: SocialManager;
+  private roadManager: RoadManager;
   private state: SimulationState;
   private isRunning: boolean = false;
   private isPaused: boolean = false;
@@ -37,6 +39,7 @@ export class SimulationEngine extends EventEmitter {
     this.agentManager = new AgentManager(this.state);
     this.worldManager = new WorldManager(this.state);
     this.socialManager = new SocialManager(this.state);
+    this.roadManager = new RoadManager();
 
     // Set up event listeners
     this.setupEventListeners();
@@ -162,6 +165,9 @@ export class SimulationEngine extends EventEmitter {
       // Update social systems
       this.socialManager.update(this.currentTick);
       
+      // Update road systems
+      this.updateRoadSystems();
+      
       // Update agents
       this.agentManager.update(this.currentTick);
       
@@ -181,6 +187,17 @@ export class SimulationEngine extends EventEmitter {
     } catch (error) {
       console.error('❌ Error in simulation tick:', error);
       this.emit('simulation:error', error);
+    }
+  }
+
+  private updateRoadSystems(): void {
+    // Update road conditions over time
+    this.roadManager.updateRoadConditions();
+    
+    // Analyze settlement needs periodically (every 100 ticks)
+    if (this.currentTick % 100 === 0) {
+      // For now, we'll skip settlement analysis until we have proper access to settlement data
+      // This will be implemented when we integrate the road system more fully
     }
   }
 
@@ -240,5 +257,9 @@ export class SimulationEngine extends EventEmitter {
 
   public getWorldManager(): WorldManager {
     return this.worldManager;
+  }
+
+  public getRoadManager(): RoadManager {
+    return this.roadManager;
   }
 } 

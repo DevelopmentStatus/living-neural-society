@@ -1,4 +1,4 @@
-import { WorldTile, TileType, ResourceType, Structure, StructureType, Resource } from '../../types/simulation';
+import { WorldTile, TileType, ResourceType, Structure, StructureType, Resource, TileLevel } from '../../types/simulation';
 
 export interface WorldGenerationConfig {
   width: number;
@@ -893,6 +893,42 @@ export class WorldGenerator {
       accessibility: Math.max(0, 1 - layer.elevation),
       structures: layer.city ? this.generateCityStructure(x, y, layer) : [],
       agents: [],
+      level: TileLevel.GROUND,
+      connections: [],
+      tileData: {
+        biome: layer.biome,
+        climate: this.determineClimate(layer.temperature, layer.humidity),
+        terrain: this.determineTerrain(layer.elevation),
+        resourceNodes: [],
+        resourceClusters: [],
+        roads: [],
+        bridges: [],
+        walls: [],
+        vegetation: [],
+        wildlife: [],
+        weather: {
+          temperature: layer.temperature,
+          humidity: layer.humidity,
+          windSpeed: 0,
+          windDirection: 0,
+          precipitation: 0,
+          visibility: 1,
+          conditions: []
+        },
+        culture: 'unknown',
+        religion: 'unknown',
+        language: 'unknown',
+        tradeRoutes: [],
+        markets: [],
+        industries: [],
+        ownership: 'unclaimed',
+        governance: 'none',
+        laws: [],
+        history: [],
+        ruins: [],
+        artifacts: []
+      },
+      isExpanded: false
     };
   }
 
@@ -1263,5 +1299,29 @@ export class WorldGenerator {
 
   public getLakes(): { center: { x: number; y: number }; radius: number }[] {
     return this.lakes;
+  }
+
+  private determineClimate(temperature: number, humidity: number): string {
+    if (temperature > 0.7) {
+      if (humidity > 0.7) return 'tropical';
+      if (humidity > 0.4) return 'subtropical';
+      return 'desert';
+    } else if (temperature > 0.3) {
+      if (humidity > 0.7) return 'temperate_wet';
+      if (humidity > 0.4) return 'temperate';
+      return 'temperate_dry';
+    } else {
+      if (humidity > 0.7) return 'cold_wet';
+      if (humidity > 0.4) return 'cold';
+      return 'arctic';
+    }
+  }
+
+  private determineTerrain(elevation: number): string {
+    if (elevation > 0.8) return 'mountain';
+    if (elevation > 0.6) return 'hill';
+    if (elevation > 0.3) return 'plain';
+    if (elevation > 0.1) return 'lowland';
+    return 'water';
   }
 } 

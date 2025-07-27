@@ -1,13 +1,13 @@
 import { EventEmitter } from 'events';
 import { SimulationState, WorldTile, ResourceType } from '../../types/simulation';
 import { PoliticalRegion } from './WorldGenerator';
-import { FMGWorldGenerator } from './FMGWorldGenerator';
+import { DwarfFortressWorldGenerator, DwarfFortressConfig, DFWorldData } from './DwarfFortressWorldGenerator';
 
 export class WorldManager extends EventEmitter {
   private world: WorldTile[][] = [];
   private worldSize: { width: number; height: number };
   private tick: number = 0;
-  private fmgGenerator: FMGWorldGenerator;
+  private dfGenerator: DwarfFortressWorldGenerator;
   private politicalRegions: PoliticalRegion[] = [];
   private cities: { x: number; y: number; name: string; size: number }[] = [];
   private rivers: { points: { x: number; y: number }[]; width: number }[] = [];
@@ -17,61 +17,104 @@ export class WorldManager extends EventEmitter {
     super();
     this.worldSize = state.worldSize;
     
-    // Initialize FMG world generator for sophisticated generation
-    this.fmgGenerator = new FMGWorldGenerator(
-      this.worldSize.width,
-      this.worldSize.height,
-      10000, // cell count
-      Math.floor(Math.random() * 1000000) // random seed
-    );
+    // Initialize Dwarf Fortress world generator
+    const config: DwarfFortressConfig = {
+      width: this.worldSize.width,
+      height: this.worldSize.height,
+      seed: Math.floor(Math.random() * 1000000),
+      // World generation parameters
+      elevationScale: 0.02,
+      temperatureScale: 0.03,
+      rainfallScale: 0.025,
+      // New parameters for improved world generation
+      seaLevel: 0.45, // Creates more land than water
+      continentCount: 3, // Number of major continents
+      islandDensity: 0.4, // Density of smaller islands
+      // Feature generation
+      mountainRanges: 3,
+      riverCount: 8,
+      lakeCount: 5,
+      forestDensity: 0.4,
+      caveSystems: 4,
+      // Civilization parameters
+      civilizationCount: 3,
+      settlementDensity: 0.6,
+      roadDensity: 0.4,
+      // Resource parameters
+      mineralRichness: 0.3,
+      soilFertility: 0.5,
+      waterAvailability: 0.4,
+    };
     
+    this.dfGenerator = new DwarfFortressWorldGenerator(config);
   }
 
   public initialize(): void {
-    console.log('🌍 Initializing World Manager with FMG generation...');
+    console.log('🌍 Initializing World Manager with Dwarf Fortress generation...');
     this.generateWorld();
-    console.log('✅ World Manager initialized with FMG world');
+    console.log('✅ World Manager initialized with Dwarf Fortress world');
   }
 
   private generateWorld(): void {
-    console.log('🏔️ Generating FMG-style world with sophisticated terrain, rivers, and biomes...');
+    console.log('🏔️ Generating Dwarf Fortress-style world with Diamond-Square algorithm...');
     
-    // Use FMG generator for sophisticated world generation
-    const fmgWorldData = this.fmgGenerator.generate();
+    // Use Dwarf Fortress generator for sophisticated world generation
+    const dfWorldData = this.dfGenerator.generate();
     
-    // Convert FMG data to our format
-    this.world = fmgWorldData.tiles;
-    this.rivers = fmgWorldData.rivers;
-    this.lakes = fmgWorldData.lakes;
+    // Convert DF data to our format
+    this.world = dfWorldData.tiles;
+    this.rivers = dfWorldData.rivers.map(river => ({
+      points: river.points,
+      width: river.width
+    }));
+    this.lakes = dfWorldData.lakes.map(lake => ({
+      center: lake.center,
+      radius: lake.radius
+    }));
     
-    // Convert political regions
-    this.politicalRegions = fmgWorldData.politicalRegions.map((region: any, index: number) => ({
+    // Convert civilizations to political regions
+    this.politicalRegions = dfWorldData.civilizations.map((civ: any, index: number) => ({
       id: index,
-      name: region.name,
-      color: region.color,
-      territory: region.territory,
-      population: region.population,
-      resources: region.resources,
-      capital: region.capital || null,
-      faction: region.faction || `faction_${index}`,
-      ideology: region.ideology || 'neutral',
-      technology: region.technology || 1,
-      wealth: region.wealth || 1000,
-      relations: region.relations || {},
+      name: civ.name,
+      color: this.getCivColor(civ.type),
+      territory: civ.territory,
+      population: civ.population,
+      resources: [],
+      capital: civ.capital,
+      faction: civ.id,
+      ideology: civ.culture,
+      technology: civ.technology,
+      wealth: civ.wealth,
+      relations: civ.relations,
     }));
     
-    // Convert cities
-    this.cities = fmgWorldData.cities.map((city: any) => ({
-      x: city.x,
-      y: city.y,
-      name: city.name,
-      size: city.size,
+    // Convert settlements to cities
+    this.cities = dfWorldData.settlements.map((settlement: any) => ({
+      x: settlement.position.x,
+      y: settlement.position.y,
+      name: settlement.name,
+      size: settlement.size,
     }));
     
-    console.log(`🌍 Generated FMG world with ${this.politicalRegions.length} political regions`);
-    console.log(`🏙️ Generated ${this.cities.length} cities`);
-    console.log(`🌊 Generated ${this.rivers.length} rivers`);
-    console.log(`🏞️ Generated ${this.lakes.length} lakes`);
+    console.log(`🌍 Generated Dwarf Fortress world with Diamond-Square algorithm`);
+    console.log(`   - Continents: ${dfWorldData.continents.length}`);
+    console.log(`   - Islands: ${dfWorldData.islands.length}`);
+    console.log(`   - Enhanced Rivers: ${dfWorldData.enhancedRivers.length}`);
+    console.log(`   - Enhanced Lakes: ${dfWorldData.enhancedLakes.length}`);
+    console.log(`   - Civilizations: ${this.politicalRegions.length}`);
+    console.log(`   - Settlements: ${this.cities.length}`);
+    console.log(`   - Sea Level: ${dfWorldData.seaLevel}`);
+  }
+
+  private getCivColor(civType: string): string {
+    switch (civType) {
+      case 'dwarven': return '#8B4513';
+      case 'human': return '#4169E1';
+      case 'elven': return '#228B22';
+      case 'goblin': return '#32CD32';
+      case 'orcish': return '#8B0000';
+      default: return '#808080';
+    }
   }
 
   public update(tick: number): void {

@@ -1,5 +1,6 @@
-import { TileType } from '../../types/simulation';
+import { TileType, TileLevel, TileData, SettlementType } from '../../types/simulation';
 import type { WorldTile } from '../../types/simulation';
+import { HierarchicalTileManager, TileExpansionConfig } from './HierarchicalTileManager';
 
 export interface MultiScaleConfig {
   // Zoom levels for detail generation
@@ -310,7 +311,11 @@ export class MultiScaleWorldManager {
       fertility: 0.5,
       accessibility: 1 - elevation,
       structures: [],
-      agents: []
+      agents: [],
+      level: TileLevel.WORLD,
+      connections: [],
+      tileData: this.generateTileData(biome, elevation, temperature, humidity),
+      isExpanded: false
     };
   }
   
@@ -334,8 +339,63 @@ export class MultiScaleWorldManager {
       fertility: this.calculateFertility(elevation, humidity),
       accessibility: this.calculateAccessibility(elevation),
       structures: [],
-      agents: []
+      agents: [],
+      level: TileLevel.REGION,
+      connections: [],
+      tileData: this.generateTileData(biome, elevation, temperature, humidity),
+      isExpanded: false
     };
+  }
+
+  private generateTileData(biome: string, elevation: number, temperature: number, humidity: number): TileData {
+    return {
+      biome,
+      climate: this.determineClimate(temperature, humidity),
+      terrain: this.determineTerrain(elevation),
+      resourceNodes: [],
+      resourceClusters: [],
+      roads: [],
+      bridges: [],
+      walls: [],
+      vegetation: [],
+      wildlife: [],
+      weather: {
+        temperature,
+        humidity,
+        windSpeed: 0,
+        windDirection: 0,
+        precipitation: 0,
+        visibility: 1,
+        conditions: []
+      },
+      culture: 'unknown',
+      religion: 'unknown',
+      language: 'unknown',
+      tradeRoutes: [],
+      markets: [],
+      industries: [],
+      ownership: 'unclaimed',
+      governance: 'none',
+      laws: [],
+      history: [],
+      ruins: [],
+      artifacts: []
+    };
+  }
+
+  private determineClimate(temperature: number, humidity: number): string {
+    if (temperature < 0.3) return 'cold';
+    if (temperature > 0.7) return 'hot';
+    if (humidity > 0.7) return 'humid';
+    if (humidity < 0.3) return 'dry';
+    return 'temperate';
+  }
+
+  private determineTerrain(elevation: number): string {
+    if (elevation > 0.8) return 'mountainous';
+    if (elevation > 0.6) return 'hilly';
+    if (elevation > 0.3) return 'rolling';
+    return 'flat';
   }
   
   private generateTownLayout(townData: any): any {

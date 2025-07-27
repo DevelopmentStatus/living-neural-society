@@ -1,0 +1,39 @@
+.minimap-container {
+  position: absolute;
+  bottom: 80px;
+  left: 20px;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 1rem;
+  z-index: 100;
+  width: 240px;
+}
+
+.minimap-container h4 {
+  margin: 0 0 0.75rem 0;
+  color: #4facfe;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+.minimap-canvas {
+  width: 200px;
+  height: 150px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  cursor: crosshair;
+  background: #1a1a2e;
+  display: block;
+  margin: 0 auto;
+}
+
+.minimap-canvas:hover {
+  border-color: #4facfe;
+}
+
+.minimap-canvas:active {
+  border-color: #ff0000;
+} 

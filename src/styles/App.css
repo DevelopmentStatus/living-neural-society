@@ -9,8 +9,8 @@
 
 .app-main {
   flex: 1;
-  padding: 2rem;
-  overflow-y: auto;
+  /* Remove padding and max-width constraints for full-screen simulation */
+  overflow: hidden; /* Prevent scrolling when simulation is full-screen */
 }
 
 /* Navigation Styles */
