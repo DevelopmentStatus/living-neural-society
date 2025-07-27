@@ -419,8 +419,8 @@ CMD ["npm", "start"]
 - [x] Project setup and configuration
 - [x] Basic React application structure
 - [x] TypeScript type definitions
-- [ ] Core simulation engine
-- [ ] Basic agent system
+- [x] Core simulation engine
+- [x] Basic agent system
 
 ### Phase 2: Agent Intelligence (Weeks 5-8)
 - [ ] Neural network implementation

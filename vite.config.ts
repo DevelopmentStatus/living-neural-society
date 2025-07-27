@@ -1,22 +1,21 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import path from 'path';
 
 export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
-      '@/core': path.resolve(__dirname, './src/core'),
-      '@/agents': path.resolve(__dirname, './src/agents'),
-      '@/world': path.resolve(__dirname, './src/world'),
-      '@/social': path.resolve(__dirname, './src/social'),
-      '@/civilization': path.resolve(__dirname, './src/civilization'),
-      '@/conflict': path.resolve(__dirname, './src/conflict'),
-      '@/evolution': path.resolve(__dirname, './src/evolution'),
-      '@/utils': path.resolve(__dirname, './src/utils'),
-      '@/types': path.resolve(__dirname, './src/types'),
-      '@/constants': path.resolve(__dirname, './src/constants'),
+      '@': './src',
+      '@/core': './src/core',
+      '@/agents': './src/agents',
+      '@/world': './src/world',
+      '@/social': './src/social',
+      '@/civilization': './src/civilization',
+      '@/conflict': './src/conflict',
+      '@/evolution': './src/evolution',
+      '@/utils': './src/utils',
+      '@/types': './src/types',
+      '@/constants': './src/constants',
     },
   },
   server: {
@@ -28,6 +27,13 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: true,
     rollupOptions: {
+      external: [
+        '@tensorflow/tfjs-layers',
+        '@tensorflow/tfjs-converter',
+        '@tensorflow/tfjs-data',
+        '@tensorflow/tfjs-backend-cpu',
+        '@tensorflow/tfjs-backend-webgl',
+      ],
       output: {
         manualChunks: {
           vendor: ['react', 'react-dom'],
@@ -50,16 +56,17 @@ export default defineConfig({
     include: [
       'react',
       'react-dom',
-      '@tensorflow/tfjs',
       'brain.js',
       'three',
       'd3',
       'lodash',
       'ramda',
     ],
+    exclude: ['@tensorflow/tfjs'],
   },
   define: {
     'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV),
+    global: 'globalThis',
   },
   worker: {
     format: 'es',

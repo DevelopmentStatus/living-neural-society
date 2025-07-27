@@ -12,10 +12,11 @@ const startTime = performance.now();
 // Initialize TensorFlow.js
 async function initializeTensorFlow() {
   try {
-    const tf = await import('@tensorflow/tfjs');
-    await tf.ready();
-    console.log('TensorFlow.js initialized successfully');
-    return true;
+    // Temporarily disabled TensorFlow.js to get basic app running
+    // const tf = await import('@tensorflow/tfjs');
+    // await tf.ready();
+    console.log('TensorFlow.js temporarily disabled');
+    return false;
   } catch (error) {
     console.error('Failed to initialize TensorFlow.js:', error);
     return false;
@@ -91,7 +92,7 @@ async function initializeApp() {
       <React.StrictMode>
         <ErrorBoundary>
           <BrowserRouter>
-            <SimulationProvider systems={systems}>
+            <SimulationProvider>
               <App />
             </SimulationProvider>
           </BrowserRouter>
