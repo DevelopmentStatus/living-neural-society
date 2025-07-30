@@ -19,6 +19,10 @@ export interface PerformanceRenderConfig {
   enableOctrees: boolean;
   maxVisibleTiles: number;
   resourceVisibilityThreshold: number; // Zoom level below which resources are hidden
+  // Enhanced viewport culling options
+  viewportBufferSize: number; // Buffer size in tiles around viewport
+  adaptiveBufferScaling: boolean; // Scale buffer based on zoom level
+  maxBufferMultiplier: number; // Maximum buffer size multiplier
   // New layer options
   showBiomeColors: boolean;
   showSoilQuality: boolean;
@@ -59,6 +63,21 @@ interface MeshRegion {
   bgColor: string;
 }
 
+// Enhanced viewport culling interface
+interface ViewportBounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  bufferMinX: number;
+  bufferMaxX: number;
+  bufferMinY: number;
+  bufferMaxY: number;
+  screenWidth: number;
+  screenHeight: number;
+  worldToScreenScale: number;
+}
+
 export class PerformanceRenderer {
   private config: PerformanceRenderConfig;
   private canvas: HTMLCanvasElement | null = null;
@@ -66,9 +85,16 @@ export class PerformanceRenderer {
   private tileCache: Map<string, { char: string; color: string; bgColor: string }> = new Map();
   private octree: OctreeNode | null = null;
   private meshCache: Map<string, MeshRegion[]> = new Map();
+  private lastViewportBounds: ViewportBounds | null = null;
+  private viewportCache: Map<string, WorldTile[]> = new Map();
 
   constructor(config: PerformanceRenderConfig) {
-    this.config = config;
+    this.config = {
+      ...config,
+      viewportBufferSize: config.viewportBufferSize || 0, // Default to no buffer
+      adaptiveBufferScaling: config.adaptiveBufferScaling !== false,
+      maxBufferMultiplier: config.maxBufferMultiplier || 1.0 // Default to no multiplier
+    };
   }
 
   public setCanvas(canvas: HTMLCanvasElement): void {
@@ -98,6 +124,16 @@ export class PerformanceRenderer {
     }
   }
 
+  public cleanup(): void {
+    // Clear caches
+    this.tileCache.clear();
+    this.meshCache.clear();
+    this.viewportCache.clear();
+    this.lastViewportBounds = null;
+    
+    console.log('✅ PerformanceRenderer cleaned up');
+  }
+
   public render(data: PerformanceRenderData): void {
     if (!this.ctx || !this.canvas) {
       console.warn('Canvas not set for rendering');
@@ -111,43 +147,22 @@ export class PerformanceRenderer {
     // Reset font to base size
     this.ctx.font = `${this.config.fontSize}px ${this.config.fontFamily}`;
 
-    // Build octree if enabled and not already built
-    if (this.config.enableOctrees && !this.octree) {
-      this.buildOctree(data.worldData.tiles);
-    }
-
-    // Get visible tiles using octree or traditional method
-    let visibleTiles = this.getVisibleTiles(data);
+    // Simple viewport calculation
+    const viewportBounds = this.calculateViewportBounds(data);
     
-    // Debug logging for zoom issues
-    console.log('🔍 Render Debug:', {
-      zoomLevel: data.zoomLevel,
-      visibleTiles: visibleTiles.length,
-      useGreedyMeshing: true, // Always enabled
-      centerX: data.centerX,
-      centerY: data.centerY,
-      viewportWidth: data.viewportWidth,
-      viewportHeight: data.viewportHeight
-    });
+    // Get visible tiles with minimal processing
+    const visibleTiles = this.getVisibleTilesWithSmartCulling(data, viewportBounds);
     
-    // Always use greedy meshing for better performance
-    console.log('🔍 Using greedy meshing for', visibleTiles.length, 'visible tiles');
-    this.renderGreedyMesh(visibleTiles, data);
-    
-
-    
-    // Fallback: If no tiles were rendered, try rendering all tiles
-    if (visibleTiles.length === 0) {
-      console.log('🔍 No visible tiles found, rendering fallback area');
-      const fallbackTiles = this.getFallbackTiles(data);
-      if (fallbackTiles.length > 0) {
-        console.log('🔍 Rendering fallback tiles:', fallbackTiles.length);
-        this.renderTiles(fallbackTiles, data);
-      }
+    // Use greedy meshing when enabled
+    if (this.config.enableGreedyMeshing) {
+      this.renderGreedyMesh(visibleTiles, data);
+    } else {
+      // Simple tile rendering - no complex optimizations
+      this.renderTiles(visibleTiles, data);
     }
     
-    // Render features (only if zoomed in enough)
-    if (data.zoomLevel > this.config.resourceVisibilityThreshold) {
+    // Only render additional features if zoomed in and not too many tiles
+    if (data.zoomLevel > 0.5 && visibleTiles.length < 5000) {
       if (this.config.showRivers) {
         this.renderRivers(data);
       }
@@ -160,25 +175,9 @@ export class PerformanceRenderer {
         this.renderSettlements(data);
       }
       
-      if (this.config.showStructures) {
-        this.renderStructures(visibleTiles, data);
+      if (this.config.showAgents && data.agents.length < 500) {
+        this.renderAgents(data.agents, data);
       }
-      
-      if (this.config.showResources) {
-        this.renderResources(visibleTiles, data);
-      }
-    }
-    
-    if (this.config.showAgents) {
-      this.renderAgents(data.agents, data);
-    }
-    
-    if (this.config.showGrid) {
-      this.renderGrid(data);
-    }
-    
-    if (this.config.showLabels) {
-      this.renderLabels(data);
     }
   }
 
@@ -199,6 +198,9 @@ export class PerformanceRenderer {
     }
 
     this.octree = this.createOctreeNode(0, 0, width, height, flatTiles, 0);
+    
+    // Clear viewport cache when world data changes
+    this.clearViewportCache();
   }
 
   private createOctreeNode(x: number, y: number, width: number, height: number, tiles: WorldTile[], depth: number): OctreeNode {
@@ -250,54 +252,9 @@ export class PerformanceRenderer {
   }
 
   private getVisibleTiles(data: PerformanceRenderData): WorldTile[] {
-    if (!data.worldData.tiles.length) {
-      console.log('🔍 Warning: No world data tiles found');
-      return [];
-    }
-
-    let tiles: WorldTile[] = [];
-    const tileSize = this.config.tileSize;
-    
-    // Calculate visible area in world coordinates with padding to reduce holes
-    const worldViewportWidth = data.viewportWidth / data.zoomLevel;
-    const worldViewportHeight = data.viewportHeight / data.zoomLevel;
-    
-    // Add padding to ensure we get complete regions and reduce holes
-    const padding = Math.max(16, 32 / data.zoomLevel); // More padding at higher zoom levels
-    
-    // Convert world viewport to tile coordinates
-    const tileViewportWidth = worldViewportWidth / tileSize;
-    const tileViewportHeight = worldViewportHeight / tileSize;
-    
-    // Calculate visible area in tile coordinates with padding
-    const startX = Math.max(0, Math.floor(data.centerX - tileViewportWidth / 2 - padding));
-    const endX = Math.min(data.worldData.tiles[0]?.length || 0, Math.ceil(data.centerX + tileViewportWidth / 2 + padding));
-    const startY = Math.max(0, Math.floor(data.centerY - tileViewportHeight / 2 - padding));
-    const endY = Math.min(data.worldData.tiles.length, Math.ceil(data.centerY + tileViewportHeight / 2 + padding));
-
-    // Use octree if available
-    if (this.config.enableOctrees && this.octree) {
-      this.queryOctree(this.octree, startX, endX, startY, endY, tiles);
-    } else {
-      // Traditional method - ensure we get all tiles in the area
-      for (let y = Math.max(0, startY); y < Math.min(data.worldData.tiles.length, endY); y++) {
-        for (let x = Math.max(0, startX); x < Math.min(data.worldData.tiles[y]?.length || 0, endX); x++) {
-          const tile = data.worldData.tiles[y]?.[x];
-          if (tile) {
-            tiles.push(tile);
-          }
-        }
-      }
-    }
-
-    // Limit visible tiles for performance, but use a higher limit to reduce holes
-    const maxTiles = Math.max(this.config.maxVisibleTiles, 10000); // Increased limit
-    if (tiles.length > maxTiles) {
-      console.log('🔍 Limiting tiles from', tiles.length, 'to', maxTiles);
-      return tiles.slice(0, maxTiles);
-    }
-
-    return tiles;
+    // Legacy method - now uses the new smart culling system
+    const viewportBounds = this.calculateViewportBounds(data);
+    return this.getVisibleTilesWithSmartCulling(data, viewportBounds);
   }
 
   private getFallbackTiles(data: PerformanceRenderData): WorldTile[] {
@@ -350,63 +307,85 @@ export class PerformanceRenderer {
   private renderGreedyMesh(tiles: WorldTile[], data: PerformanceRenderData): void {
     if (!this.ctx) return;
 
-    console.log('🔍 Greedy meshing', tiles.length, 'tiles');
-    
     const tileSize = this.config.tileSize * data.zoomLevel;
     
     // Create actual greedy mesh regions
-    const meshRegions = this.createGreedyMesh(tiles, tileSize);
-    
-    console.log('🔍 Created', meshRegions.length, 'mesh regions from', tiles.length, 'tiles');
+    const meshRegions = this.createGreedyMesh(tiles, tileSize, data.zoomLevel);
     
     // Check if we have too many small regions (indicating holes)
-    const avgRegionSize = tiles.length / meshRegions.length;
+    const avgRegionSize = tiles.length / Math.max(meshRegions.length, 1);
     const hasTooManyHoles = avgRegionSize < 2 || meshRegions.length > tiles.length * 0.8;
+    
+    // Only log greedy meshing info when there are issues or significant changes
+    if (hasTooManyHoles || Math.random() < 0.05) { // 5% chance to log normally
+      console.log(`🔍 Greedy meshing: ${tiles.length} tiles → ${meshRegions.length} regions (avg: ${avgRegionSize.toFixed(1)})`);
+    }
     
     if (hasTooManyHoles) {
       console.log('🔍 Too many holes detected, falling back to individual tile rendering');
+      // Fall back to individual tile rendering
       this.renderTiles(tiles, data);
       return;
     }
     
-    // Render each mesh region
+    // Batch render regions by type for better performance
+    const regionBatches = new Map<string, MeshRegion[]>();
+    
     for (const region of meshRegions) {
-      // Calculate screen position for the region
-      const screenX = (region.x - data.centerX) * this.config.tileSize * data.zoomLevel + data.viewportWidth / 2;
-      const screenY = (region.y - data.centerY) * this.config.tileSize * data.zoomLevel + data.viewportHeight / 2;
-      const regionWidth = region.width * tileSize;
-      const regionHeight = region.height * tileSize;
+      const batchKey = `${region.tileType}_${region.color}_${region.bgColor}`;
       
-      // Skip if off-screen
-      if (screenX < -regionWidth || screenX > data.viewportWidth + regionWidth ||
-          screenY < -regionHeight || screenY > data.viewportHeight + regionHeight) {
-        continue;
+      if (!regionBatches.has(batchKey)) {
+        regionBatches.set(batchKey, []);
       }
+      regionBatches.get(batchKey)!.push(region);
+    }
+    
+    // Render each batch
+    for (const [batchKey, batchRegions] of regionBatches) {
+      const firstRegion = batchRegions[0];
+      if (!firstRegion) continue; // Skip empty batches
       
-      // Draw the entire region as a single rectangle for background
-      this.ctx.fillStyle = region.bgColor;
-      this.ctx.fillRect(screenX, screenY, regionWidth, regionHeight);
+      // Set styles once for the batch
+      this.ctx.fillStyle = firstRegion.bgColor;
+      this.ctx.font = `${Math.max(8, Math.min(tileSize * 0.8, 16))}px ${this.config.fontFamily}`;
+      this.ctx.textAlign = 'center';
+      this.ctx.textBaseline = 'middle';
+      this.ctx.fillStyle = firstRegion.color;
       
-      // Draw characters for each tile in the region
-      if (data.zoomLevel >= 0.1) {
-        this.ctx.fillStyle = region.color;
-        this.ctx.font = `${Math.max(6, Math.min(tileSize * 0.6, 14))}px ${this.config.fontFamily}`;
-        this.ctx.textAlign = 'center';
-        this.ctx.textBaseline = 'middle';
+      const char = this.getTileChar(firstRegion.tileType);
+      
+      // Render all regions in this batch
+      for (const region of batchRegions) {
+        // Camera position is in tile coordinates, not pixel coordinates
+        // Calculate screen position centered on camera tile
+        const screenX = (region.x - data.centerX) * tileSize + data.viewportWidth / 2;
+        const screenY = (region.y - data.centerY) * tileSize + data.viewportHeight / 2;
+        const regionWidth = region.width * tileSize;
+        const regionHeight = region.height * tileSize;
         
-        const char = this.getTileChar(region.tileType);
-        
-        // Debug: Log character info for urban areas
-        if (region.tileType === TileType.URBAN || region.tileType === TileType.CAPITAL || region.tileType === TileType.TRADE_HUB) {
-          console.log('🔍 Rendering region:', region.tileType, 'char:', char, 'color:', region.color, 'bgColor:', region.bgColor, 'size:', region.width, 'x', region.height, 'zoom:', data.zoomLevel);
+        // Skip if off-screen
+        if (screenX < -regionWidth * 2 || screenX > data.viewportWidth + regionWidth * 2 ||
+            screenY < -regionHeight * 2 || screenY > data.viewportHeight + regionHeight * 2) {
+          continue;
         }
         
-        // Draw character for each tile position in the region
-        for (let y = 0; y < region.height; y++) {
-          for (let x = 0; x < region.width; x++) {
-            const tileScreenX = screenX + (x * tileSize);
-            const tileScreenY = screenY + (y * tileSize);
-            this.ctx.fillText(char, tileScreenX + tileSize / 2, tileScreenY + tileSize / 2);
+        // Draw the entire region as a single rectangle for background
+        this.ctx.fillStyle = region.bgColor;
+        this.ctx.fillRect(screenX, screenY, regionWidth, regionHeight);
+        
+        // Only draw ASCII characters when zoomed in (zoom >= 1.0)
+        // This improves performance when viewing the full world
+        if (data.zoomLevel >= 1.0) {
+          // Draw characters for each tile in the region
+          this.ctx.fillStyle = region.color;
+          
+          // Draw character for each tile position in the region
+          for (let y = 0; y < region.height; y++) {
+            for (let x = 0; x < region.width; x++) {
+              const tileScreenX = screenX + (x * tileSize);
+              const tileScreenY = screenY + (y * tileSize);
+              this.ctx.fillText(char, tileScreenX + tileSize / 2, tileScreenY + tileSize / 2);
+            }
           }
         }
       }
@@ -419,7 +398,7 @@ export class PerformanceRenderer {
     let maxHeight = 1;
     
     // Find maximum width
-    for (let w = 1; w <= 8; w++) { // Reduced limit for better performance
+    for (let w = 1; w <= 4; w++) { // Further reduced limit for better performance
       const key = `${startTile.x + w - 1},${startTile.y}`;
       const tile = tileMap.get(key);
       if (!tile || tile.type !== targetType || processed.has(key)) {
@@ -429,7 +408,7 @@ export class PerformanceRenderer {
     }
     
     // Find maximum height for this width
-    for (let h = 1; h <= 8; h++) { // Reduced limit for better performance
+    for (let h = 1; h <= 4; h++) { // Further reduced limit for better performance
       let canExpand = true;
       for (let x = 0; x < maxWidth; x++) {
         const key = `${startTile.x + x},${startTile.y + h - 1}`;
@@ -458,7 +437,9 @@ export class PerformanceRenderer {
     };
   }
 
-  private createGreedyMesh(tiles: WorldTile[], tileSize: number): MeshRegion[] {
+  private createGreedyMesh(tiles: WorldTile[], tileSize: number, zoomLevel: number = 1): MeshRegion[] {
+    if (tiles.length === 0) return [];
+    
     const regions: MeshRegion[] = [];
     const visited = new Set<string>();
     
@@ -479,14 +460,14 @@ export class PerformanceRenderer {
       if (visited.has(key)) continue;
       
       const tileInfo = this.getTileInfo(tile);
-      const region = this.expandRegion(tile, tileMap, visited, tileInfo);
+      const region = this.expandRegion(tile, tileMap, visited, tileInfo, zoomLevel);
       regions.push(region);
     }
     
     return regions;
   }
 
-  private expandRegion(startTile: WorldTile, tileMap: Map<string, WorldTile>, visited: Set<string>, tileInfo: { char: string; color: string; bgColor: string }): MeshRegion {
+  private expandRegion(startTile: WorldTile, tileMap: Map<string, WorldTile>, visited: Set<string>, tileInfo: { char: string; color: string; bgColor: string }, zoomLevel: number): MeshRegion {
     const region: MeshRegion = {
       x: startTile.x,
       y: startTile.y,
@@ -497,8 +478,13 @@ export class PerformanceRenderer {
       bgColor: tileInfo.bgColor
     };
 
-    // Increased maximum region size for better performance and fewer holes
-    const maxRegionSize = 16;
+    // Mark the starting tile as visited
+    visited.add(`${startTile.x},${startTile.y}`);
+
+    // Adaptive maximum region size based on zoom level
+    // When zoomed out, we can create larger regions for better performance
+    // When zoomed in, we need smaller regions for detail
+    const maxRegionSize = Math.max(4, Math.min(16, Math.floor(2 / Math.max(0.1, zoomLevel))));
 
     // Expand horizontally first
     let canExpandRight = true;
@@ -555,26 +541,6 @@ export class PerformanceRenderer {
     
     region.height = maxHeight;
 
-    // Validate that all tiles in the region actually exist and are of the correct type
-    let validRegion = true;
-    for (let y = region.y; y < region.y + region.height; y++) {
-      for (let x = region.x; x < region.x + region.width; x++) {
-        const key = `${x},${y}`;
-        const tile = tileMap.get(key);
-        if (!tile || tile.type !== startTile.type) {
-          validRegion = false;
-          break;
-        }
-      }
-      if (!validRegion) break;
-    }
-
-    // If region is invalid, fall back to single tile
-    if (!validRegion) {
-      region.width = 1;
-      region.height = 1;
-    }
-
     return region;
   }
 
@@ -583,10 +549,12 @@ export class PerformanceRenderer {
 
     const tileSize = this.config.tileSize * data.zoomLevel;
     
+    // Simple, fast rendering without complex batching
     for (const tile of tiles) {
       const tileInfo = this.getTileInfo(tile);
       
-      // Calculate screen position
+      // Camera position is in tile coordinates, not pixel coordinates
+      // Calculate screen position centered on camera tile
       const screenX = (tile.x - data.centerX) * tileSize + data.viewportWidth / 2;
       const screenY = (tile.y - data.centerY) * tileSize + data.viewportHeight / 2;
       
@@ -600,15 +568,16 @@ export class PerformanceRenderer {
       this.ctx.fillStyle = tileInfo.bgColor;
       this.ctx.fillRect(screenX, screenY, tileSize, tileSize);
       
-      // Set larger font size for better visibility
-      const fontSize = Math.max(8, Math.min(tileSize * 0.8, 16));
-      this.ctx.font = `${fontSize}px ${this.config.fontFamily}`;
-      this.ctx.textAlign = 'center';
-      this.ctx.textBaseline = 'middle';
-      
-      // Draw character centered in tile
-      this.ctx.fillStyle = tileInfo.color;
-      this.ctx.fillText(tileInfo.char, screenX + tileSize / 2, screenY + tileSize / 2);
+      // Only draw ASCII characters when zoomed in (zoom >= 1.0)
+      // This improves performance when viewing the full world
+      if (data.zoomLevel >= 1.0) {
+        // Draw character
+        this.ctx.fillStyle = tileInfo.color;
+        this.ctx.font = `${Math.max(8, Math.min(tileSize * 0.8, 16))}px ${this.config.fontFamily}`;
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText(tileInfo.char, screenX + tileSize / 2, screenY + tileSize / 2);
+      }
     }
   }
 
@@ -798,5 +767,200 @@ export class PerformanceRenderer {
 
   private renderLabels(data: PerformanceRenderData): void {
     // Simplified label rendering
+  }
+
+  /**
+   * Calculate viewport bounds with exact camera visibility (no buffer)
+   */
+  private calculateViewportBounds(data: PerformanceRenderData): ViewportBounds {
+    const tileSize = this.config.tileSize;
+    const worldToScreenScale = data.zoomLevel;
+    
+    // Calculate world viewport dimensions from screen dimensions
+    // Screen dimensions are in pixels, convert to world coordinates
+    const worldViewportWidth = data.viewportWidth / data.zoomLevel;
+    const worldViewportHeight = data.viewportHeight / data.zoomLevel;
+    
+    // Calculate viewport bounds in world coordinates
+    const minX = data.centerX - worldViewportWidth / 2;
+    const maxX = data.centerX + worldViewportWidth / 2;
+    const minY = data.centerY - worldViewportHeight / 2;
+    const maxY = data.centerY + worldViewportHeight / 2;
+    
+    // Add buffer for smooth scrolling (optional)
+    const bufferSize = this.config.viewportBufferSize;
+    const worldBufferSize = bufferSize * tileSize;
+    
+    // Calculate buffer bounds
+    const bufferMinX = Math.max(0, minX - worldBufferSize);
+    const bufferMaxX = maxX + worldBufferSize;
+    const bufferMinY = Math.max(0, minY - worldBufferSize);
+    const bufferMaxY = maxY + worldBufferSize;
+    
+    return {
+      minX,
+      maxX,
+      minY,
+      maxY,
+      bufferMinX,
+      bufferMaxX,
+      bufferMinY,
+      bufferMaxY,
+      screenWidth: data.viewportWidth,
+      screenHeight: data.viewportHeight,
+      worldToScreenScale
+    };
+  }
+
+  /**
+   * Get visible tiles using exact camera viewport (no buffer)
+   */
+  private getVisibleTilesWithSmartCulling(data: PerformanceRenderData, viewportBounds: ViewportBounds): WorldTile[] {
+    if (!data.worldData.tiles.length) {
+      return [];
+    }
+
+    const tiles: WorldTile[] = [];
+    const tileSize = this.config.tileSize;
+    
+    // Get all tiles in the viewable area with buffer
+    const allViewableTiles = this.getAllTilesInViewableArea(data, viewportBounds);
+    
+    // Occlude tiles that aren't actually visible on screen
+    const visibleTiles = this.occludeOffScreenTiles(allViewableTiles, data, viewportBounds);
+    
+    return visibleTiles;
+  }
+
+  /**
+   * Get all tiles in the viewable canvas area with buffer
+   */
+  private getAllTilesInViewableArea(data: PerformanceRenderData, viewportBounds: ViewportBounds): WorldTile[] {
+    const tiles: WorldTile[] = [];
+    const tileSize = this.config.tileSize;
+    
+    // Calculate buffer size (extra tiles around the viewport for smooth scrolling)
+    const bufferSize = this.config.viewportBufferSize || 16;
+    const bufferTiles = Math.ceil(bufferSize / tileSize);
+    
+    // Camera position is in tile coordinates, not pixel coordinates
+    // Calculate viewable area in tile coordinates based on camera position
+    const viewportTilesWidth = Math.ceil(data.viewportWidth / (tileSize * data.zoomLevel));
+    const viewportTilesHeight = Math.ceil(data.viewportHeight / (tileSize * data.zoomLevel));
+    
+    // Calculate tile bounds centered on camera position (in tile coordinates)
+    const startX = Math.max(0, Math.floor(data.centerX - viewportTilesWidth / 2) - bufferTiles);
+    const endX = Math.min(data.worldData.tiles[0]?.length || 0, Math.ceil(data.centerX + viewportTilesWidth / 2) + bufferTiles);
+    const startY = Math.max(0, Math.floor(data.centerY - viewportTilesHeight / 2) - bufferTiles);
+    const endY = Math.min(data.worldData.tiles.length, Math.ceil(data.centerY + viewportTilesHeight / 2) + bufferTiles);
+
+    // Calculate total tiles in viewable area for monitoring
+    const totalViewableTiles = (endX - startX) * (endY - startY);
+    
+    // Log performance info occasionally
+    if (Math.random() < 0.01) { // 1% chance to log
+      console.log(`🔍 Camera-based viewable area: ${totalViewableTiles} tiles (${startX},${startY}) to (${endX},${endY})`);
+      console.log(`📷 Camera tile: (${data.centerX.toFixed(1)}, ${data.centerY.toFixed(1)}) zoom: ${data.zoomLevel.toFixed(2)}`);
+      console.log(`📍 Viewport tiles: ${viewportTilesWidth}x${viewportTilesHeight}`);
+    }
+
+    // Get all tiles in the buffered viewport area
+    for (let y = startY; y < endY; y++) {
+      for (let x = startX; x < endX; x++) {
+        const tile = data.worldData.tiles[y]?.[x];
+        if (tile) {
+          tiles.push(tile);
+        }
+      }
+    }
+
+    return tiles;
+  }
+
+  /**
+   * Occlude tiles that aren't actually visible on the screen
+   */
+  private occludeOffScreenTiles(tiles: WorldTile[], data: PerformanceRenderData, viewportBounds: ViewportBounds): WorldTile[] {
+    const visibleTiles: WorldTile[] = [];
+    const tileSize = this.config.tileSize;
+    
+    for (const tile of tiles) {
+      // Camera position is in tile coordinates, not pixel coordinates
+      // Calculate screen position centered on camera tile
+      const screenX = (tile.x - data.centerX) * tileSize * data.zoomLevel + data.viewportWidth / 2;
+      const screenY = (tile.y - data.centerY) * tileSize * data.zoomLevel + data.viewportHeight / 2;
+      const screenTileSize = tileSize * data.zoomLevel;
+      
+      // Check if tile is visible on screen
+      if (this.isTileVisibleOnScreen(screenX, screenY, screenTileSize, data.viewportWidth, data.viewportHeight)) {
+        visibleTiles.push(tile);
+      }
+    }
+
+    // Log occlusion results occasionally
+    if (Math.random() < 0.01) { // 1% chance to log
+      const occludedCount = tiles.length - visibleTiles.length;
+      const occlusionRate = ((occludedCount / tiles.length) * 100).toFixed(1);
+      console.log(`👁️ Occlusion: ${visibleTiles.length}/${tiles.length} tiles visible (${occlusionRate}% occluded)`);
+      console.log(`📷 Screen area: ${data.viewportWidth}x${data.viewportHeight} at zoom ${data.zoomLevel.toFixed(2)}`);
+    }
+
+    return visibleTiles;
+  }
+
+  /**
+   * Check if a tile is actually visible on the screen
+   */
+  private isTileVisibleOnScreen(screenX: number, screenY: number, screenTileSize: number, viewportWidth: number, viewportHeight: number): boolean {
+    // Skip tiles that are too small to be visible
+    if (screenTileSize < 0.1) {
+      return false;
+    }
+    
+    // Skip tiles that are completely off-screen
+    if (screenX + screenTileSize < 0 || screenX > viewportWidth ||
+        screenY + screenTileSize < 0 || screenY > viewportHeight) {
+      return false;
+    }
+    
+    return true;
+  }
+
+  /**
+   * Generate cache key for viewport data
+   */
+  private getViewportCacheKey(viewportBounds: ViewportBounds, zoomLevel: number): string {
+    // Round values to reduce cache fragmentation
+    const roundedBounds = {
+      minX: Math.floor(viewportBounds.minX / 10) * 10,
+      maxX: Math.ceil(viewportBounds.maxX / 10) * 10,
+      minY: Math.floor(viewportBounds.minY / 10) * 10,
+      maxY: Math.ceil(viewportBounds.maxY / 10) * 10,
+      zoom: Math.round(zoomLevel * 100) / 100
+    };
+    
+    return `${roundedBounds.minX}_${roundedBounds.maxX}_${roundedBounds.minY}_${roundedBounds.maxY}_${roundedBounds.zoom}`;
+  }
+
+  /**
+   * Check if two viewport bounds are similar enough to use cached data
+   */
+  private isViewportSimilar(current: ViewportBounds, previous: ViewportBounds): boolean {
+    const tolerance = 50; // pixels
+    const zoomTolerance = 0.1;
+    
+    return Math.abs(current.minX - previous.minX) < tolerance &&
+           Math.abs(current.maxX - previous.maxX) < tolerance &&
+           Math.abs(current.minY - previous.minY) < tolerance &&
+           Math.abs(current.maxY - previous.maxY) < tolerance &&
+           Math.abs(current.worldToScreenScale - previous.worldToScreenScale) < zoomTolerance;
+  }
+
+  /**
+   * Clear viewport cache when world data changes
+   */
+  private clearViewportCache(): void {
+    this.viewportCache.clear();
+    this.lastViewportBounds = null;
   }
 } 

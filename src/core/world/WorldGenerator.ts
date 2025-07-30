@@ -1,4 +1,4 @@
-import { WorldTile, TileType, ResourceType, Structure, StructureType, Resource, TileLevel } from '../../types/simulation';
+import { WorldTile, TileType, ResourceType, Structure, StructureType, Resource, TileLevel, FireState } from '../../types/simulation';
 
 export interface WorldGenerationConfig {
   width: number;
@@ -893,6 +893,13 @@ export class WorldGenerator {
       accessibility: Math.max(0, 1 - layer.elevation),
       structures: layer.city ? this.generateCityStructure(x, y, layer) : [],
       agents: [],
+      soilQuality: layer.soilQuality,
+      fireState: FireState.NONE,
+      pollution: 0,
+      erosion: 0,
+      moisture: layer.humidity,
+      vegetationDensity: layer.biome === 'forest' ? 0.8 : layer.fertility * 0.5,
+      mineralContent: layer.biome === 'mountain' ? 0.9 : layer.elevation * 0.3,
       level: TileLevel.GROUND,
       connections: [],
       tileData: {

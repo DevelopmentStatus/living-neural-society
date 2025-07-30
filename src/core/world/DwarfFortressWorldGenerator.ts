@@ -222,6 +222,8 @@ export class DwarfFortressWorldGenerator {
   private config: DwarfFortressConfig;
   private noiseCache: Map<string, number> = new Map();
   private worldData: DFWorldData;
+  private tileStateCache: Map<string, WorldTile> = new Map(); // Cache for dynamic tile states
+  private worldGenerated: boolean = false; // Flag to ensure world is only generated once
 
   constructor(config: DwarfFortressConfig) {
     this.config = config;
@@ -235,145 +237,258 @@ export class DwarfFortressWorldGenerator {
       settlements: [],
       biomes: [],
       history: [],
-      // New data structures for improved world generation
       continents: [],
       islands: [],
       enhancedRivers: [],
       enhancedLakes: [],
       heightmap: [],
-      seaLevel: 0.5
+      seaLevel: config.seaLevel
     };
   }
 
   public generate(): DFWorldData {
-    console.log('🏔️ Starting Dwarf Fortress world generation with Diamond-Square algorithm...');
+    if (this.worldGenerated) {
+      console.log('🔄 World already generated, returning cached data');
+      return this.worldData;
+    }
+
+    console.log('🏔️ Generating new Dwarf Fortress world...');
     
-    // Phase 1: Generate base terrain using Diamond-Square algorithm
+    // Generate the base world structure
     this.generateBaseTerrain();
-    
-    // Phase 2: Generate major features
     this.generateMountainRanges();
     this.generateRivers();
     this.generateLakes();
     this.generateCaveSystems();
-    
-    // Phase 3: Generate biomes and climate
     this.generateBiomes();
-    
-    // Phase 4: Generate civilizations and settlements
     this.generateCivilizations();
     this.generateSettlements();
-    
-    // Phase 5: Generate infrastructure
     this.generateRoads();
-    
-    // Phase 6: Generate history
     this.generateHistory();
-    
-    // Phase 7: Finalize world
     this.finalizeWorld();
     
-    console.log('✅ Dwarf Fortress world generation complete!');
-    console.log(`🌍 World Statistics:`);
-    console.log(`   - Continents: ${this.worldData.continents.length}`);
-    console.log(`   - Islands: ${this.worldData.islands.length}`);
-    console.log(`   - Rivers: ${this.worldData.enhancedRivers.length}`);
-    console.log(`   - Lakes: ${this.worldData.enhancedLakes.length}`);
-    console.log(`   - Civilizations: ${this.worldData.civilizations.length}`);
-    console.log(`   - Settlements: ${this.worldData.settlements.length}`);
+    // Cache all tiles for future state updates
+    this.cacheAllTiles();
+    
+    this.worldGenerated = true;
+    console.log('✅ World generation complete');
     
     return this.worldData;
   }
 
-  public updateTileStates(): void {
-    // Update environmental states like fire spreading, soil erosion, etc.
-    for (let y = 0; y < this.config.height; y++) {
-      for (let x = 0; x < this.config.width; x++) {
-        const tile = this.worldData.tiles[y]?.[x];
-        if (!tile) continue;
-        
-        this.updateFireState(tile, x, y);
-        this.updateSoilQuality(tile);
-        this.updateVegetationDensity(tile);
-      }
-    }
-  }
-
-  private updateFireState(tile: WorldTile, x: number, y: number): void {
-    // Simulate fire spreading
-    if (tile.fireState === FireState.BURNING || tile.fireState === FireState.INTENSE) {
-      // Spread fire to neighboring tiles
-      const neighbors = this.getNeighbors(x, y);
-      for (const neighbor of neighbors) {
-        const neighborTile = this.worldData.tiles[neighbor.y]?.[neighbor.x];
-        if (neighborTile && neighborTile.fireState === FireState.NONE) {
-          // Chance to spread fire based on vegetation density and wind
-          const spreadChance = neighborTile.vegetationDensity * 0.1;
-          if (Math.random() < spreadChance) {
-            neighborTile.fireState = FireState.SMOLDERING;
-          }
-        }
-      }
-      
-      // Fire progression
-      if (tile.fireState === FireState.BURNING && Math.random() < 0.1) {
-        tile.fireState = FireState.INTENSE;
-      } else if (tile.fireState === FireState.INTENSE && Math.random() < 0.2) {
-        tile.fireState = FireState.BURNT;
-      }
-    } else if (tile.fireState === FireState.SMOLDERING) {
-      if (Math.random() < 0.3) {
-        tile.fireState = FireState.BURNING;
-      } else if (Math.random() < 0.1) {
-        tile.fireState = FireState.NONE;
-      }
-    } else if (tile.fireState === FireState.BURNT) {
-      if (Math.random() < 0.05) {
-        tile.fireState = FireState.RECOVERING;
-      }
-    } else if (tile.fireState === FireState.RECOVERING) {
-      if (Math.random() < 0.1) {
-        tile.fireState = FireState.NONE;
-        tile.vegetationDensity = Math.min(1, tile.vegetationDensity + 0.1);
-      }
-    }
-  }
-
-  private updateSoilQuality(tile: WorldTile): void {
-    // Soil quality changes over time
-    if (tile.fireState === FireState.BURNT) {
-      tile.soilQuality = Math.max(0, tile.soilQuality - 0.1);
-    } else if (tile.fireState === FireState.RECOVERING) {
-      tile.soilQuality = Math.min(1, tile.soilQuality + 0.05);
+  /**
+   * Cache all tiles for efficient state updates
+   */
+  private cacheAllTiles(): void {
+    console.log('📦 Caching all tiles for dynamic updates...');
+    if (!this.worldData.tiles) {
+      console.warn('⚠️ No tiles to cache');
+      return;
     }
     
-    // Erosion effects
-    if (tile.erosion > 0.7) {
-      tile.soilQuality = Math.max(0, tile.soilQuality - 0.01);
+    for (let y = 0; y < this.worldData.tiles.length; y++) {
+      const row = this.worldData.tiles[y];
+      if (!row) continue;
+      
+      for (let x = 0; x < row.length; x++) {
+        const tile = row[x];
+        if (tile) {
+          const key = `${x},${y}`;
+          this.tileStateCache.set(key, { ...tile });
+        }
+      }
+    }
+    console.log(`📦 Cached ${this.tileStateCache.size} tiles`);
+  }
+
+  /**
+   * Update a specific tile's state without regenerating the world
+   */
+  public updateTileState(x: number, y: number, updates: Partial<WorldTile>): void {
+    const key = `${x},${y}`;
+    const cachedTile = this.tileStateCache.get(key);
+    
+    if (cachedTile) {
+      // Update the cached tile
+      Object.assign(cachedTile, updates);
+      
+      // Update the world data
+      if (this.worldData.tiles[y] && this.worldData.tiles[y][x]) {
+        Object.assign(this.worldData.tiles[y][x], updates);
+      }
+      
+      console.log(`🔄 Updated tile (${x}, ${y}):`, updates);
     }
   }
 
-  private updateVegetationDensity(tile: WorldTile): void {
-    // Vegetation recovery and growth
-    if (tile.fireState === FireState.BURNT) {
-      tile.vegetationDensity = Math.max(0, tile.vegetationDensity - 0.3);
-    } else if (tile.fireState === FireState.RECOVERING) {
-      tile.vegetationDensity = Math.min(1, tile.vegetationDensity + 0.05);
-    } else if (tile.fireState === FireState.NONE && tile.soilQuality > 0.6) {
-      // Natural growth
-      tile.vegetationDensity = Math.min(1, tile.vegetationDensity + 0.01);
+  /**
+   * Update multiple tiles at once for batch operations
+   */
+  public updateTileStates(updates: Array<{ x: number; y: number; updates: Partial<WorldTile> }>): void {
+    console.log(`🔄 Batch updating ${updates.length} tiles...`);
+    
+    for (const { x, y, updates: tileUpdates } of updates) {
+      this.updateTileState(x, y, tileUpdates);
     }
   }
 
+  /**
+   * Get a tile's current state (from cache if available)
+   */
+  public getTileState(x: number, y: number): WorldTile | null {
+    const key = `${x},${y}`;
+    return this.tileStateCache.get(key) || null;
+  }
+
+  /**
+   * Apply farming effects to a tile
+   */
+  public applyFarming(x: number, y: number): void {
+    const tile = this.getTileState(x, y);
+    if (tile) {
+      this.updateTileState(x, y, {
+        type: TileType.FARM,
+        soilQuality: Math.min(1.0, tile.soilQuality + 0.1),
+        vegetationDensity: Math.max(0.1, tile.vegetationDensity - 0.2),
+        elevation: Math.max(0, tile.elevation - 0.05) // Slight flattening
+      });
+    }
+  }
+
+  /**
+   * Apply building effects to a tile
+   */
+  public applyBuilding(x: number, y: number, buildingType: string): void {
+    const tile = this.getTileState(x, y);
+    if (tile) {
+      this.updateTileState(x, y, {
+        type: TileType.URBAN,
+        elevation: Math.max(0, tile.elevation - 0.1), // Flatten for building
+        soilQuality: Math.max(0.1, tile.soilQuality - 0.3), // Compact soil
+        accessibility: Math.min(1.0, tile.accessibility + 0.5) // Better access
+      });
+    }
+  }
+
+  /**
+   * Apply erosion effects to a tile
+   */
+  public applyErosion(x: number, y: number, intensity: number = 0.1): void {
+    const tile = this.getTileState(x, y);
+    if (tile) {
+      this.updateTileState(x, y, {
+        elevation: Math.max(0, tile.elevation - intensity),
+        soilQuality: Math.max(0, tile.soilQuality - intensity * 0.5),
+        erosion: Math.min(1.0, tile.erosion + intensity)
+      });
+    }
+  }
+
+  /**
+   * Apply age effects to a tile (long-term changes)
+   */
+  public applyAgeEffects(x: number, y: number, ageInYears: number): void {
+    const tile = this.getTileState(x, y);
+    if (tile) {
+      const ageFactor = Math.min(1.0, ageInYears / 100); // Normalize to 0-1
+      
+      this.updateTileState(x, y, {
+        soilQuality: Math.max(0, tile.soilQuality - ageFactor * 0.1),
+        vegetationDensity: Math.min(1.0, tile.vegetationDensity + ageFactor * 0.05),
+        erosion: Math.min(1.0, tile.erosion + ageFactor * 0.02)
+      });
+    }
+  }
+
+  /**
+   * Start a fire at a specific location
+   */
   public startFire(x: number, y: number): void {
-    const tile = this.worldData.tiles[y]?.[x];
-    if (tile && tile.fireState === FireState.NONE && tile.vegetationDensity > 0.3) {
-      tile.fireState = FireState.SMOLDERING;
+    const tile = this.getTileState(x, y);
+    if (tile && tile.type !== TileType.WATER) {
+      this.updateTileState(x, y, {
+        fireState: FireState.BURNING,
+        vegetationDensity: Math.max(0, tile.vegetationDensity - 0.3),
+        soilQuality: Math.max(0, tile.soilQuality - 0.1)
+      });
     }
   }
 
-  public getTileInfo(x: number, y: number): WorldTile | null {
-    return this.worldData.tiles[y]?.[x] || null;
+  /**
+   * Extinguish fire at a specific location
+   */
+  public extinguishFire(x: number, y: number): void {
+    const tile = this.getTileState(x, y);
+    if (tile) {
+      this.updateTileState(x, y, {
+        fireState: FireState.NONE
+      });
+    }
+  }
+
+  /**
+   * Get all tiles in a region for batch operations
+   */
+  public getTilesInRegion(startX: number, startY: number, width: number, height: number): WorldTile[] {
+    const tiles: WorldTile[] = [];
+    
+    for (let y = startY; y < startY + height; y++) {
+      for (let x = startX; x < startX + width; x++) {
+        const tile = this.getTileState(x, y);
+        if (tile) {
+          tiles.push(tile);
+        }
+      }
+    }
+    
+    return tiles;
+  }
+
+  /**
+   * Get world statistics for monitoring
+   */
+  public getWorldStatistics(): {
+    totalTiles: number;
+    cachedTiles: number;
+    tileTypes: Record<TileType, number>;
+    averageSoilQuality: number;
+    averageVegetationDensity: number;
+    burningTiles: number;
+  } {
+    const stats = {
+      totalTiles: 0,
+      cachedTiles: this.tileStateCache.size,
+      tileTypes: {} as Record<TileType, number>,
+      averageSoilQuality: 0,
+      averageVegetationDensity: 0,
+      burningTiles: 0
+    };
+
+    let totalSoilQuality = 0;
+    let totalVegetationDensity = 0;
+
+    for (const tile of this.tileStateCache.values()) {
+      stats.totalTiles++;
+      
+      // Count tile types
+      stats.tileTypes[tile.type] = (stats.tileTypes[tile.type] || 0) + 1;
+      
+      // Accumulate averages
+      totalSoilQuality += tile.soilQuality;
+      totalVegetationDensity += tile.vegetationDensity;
+      
+      // Count burning tiles
+      if (tile.fireState === FireState.BURNING) {
+        stats.burningTiles++;
+      }
+    }
+
+    if (stats.totalTiles > 0) {
+      stats.averageSoilQuality = totalSoilQuality / stats.totalTiles;
+      stats.averageVegetationDensity = totalVegetationDensity / stats.totalTiles;
+    }
+
+    return stats;
   }
 
   private generateBaseTerrain(): void {

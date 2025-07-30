@@ -56,13 +56,12 @@ export const Minimap: React.FC<MinimapProps> = ({
     }
 
     // Draw camera viewport
-    const worldViewportWidth = viewportSize.width / camera.zoom;
-    const worldViewportHeight = viewportSize.height / camera.zoom;
-    
+    // camera.x and camera.y represent the center of the viewport in world coordinates
+    // viewportSize.width and viewportSize.height are in world coordinates (tiles)
     const camX = (camera.x / worldSize.width) * canvas.width;
     const camY = (camera.y / worldSize.height) * canvas.height;
-    const camWidth = (worldViewportWidth / worldSize.width) * canvas.width;
-    const camHeight = (worldViewportHeight / worldSize.height) * canvas.height;
+    const camWidth = (viewportSize.width / worldSize.width) * canvas.width;
+    const camHeight = (viewportSize.height / worldSize.height) * canvas.height;
 
     ctx.strokeStyle = '#4facfe';
     ctx.lineWidth = 2;

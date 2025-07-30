@@ -13,7 +13,7 @@ export class SimulationEngine extends EventEmitter {
   private state: SimulationState;
   private isRunning: boolean = false;
   private isPaused: boolean = false;
-  private tickInterval: number = 100; // milliseconds per tick
+  private tickInterval: number = 200; // milliseconds per tick (reduced from 100ms for better performance)
   private tickId: number | null = null;
   private currentTick: number = 0;
   private speed: number = 1.0;
@@ -174,12 +174,19 @@ export class SimulationEngine extends EventEmitter {
       // Update simulation state
       this.updateSimulationState();
       
+      const tickTime = performance.now() - startTime;
+      
+      // Log performance warnings if tick takes too long
+      if (tickTime > 50) {
+        console.warn(`⚠️ Slow simulation tick: ${tickTime.toFixed(2)}ms`);
+      }
+      
       // Emit tick event
       this.emit('simulation:tick', {
         tick: this.currentTick,
         agents: this.state.totalAgents,
         factions: this.state.totalFactions,
-        performance: performance.now() - startTime,
+        performance: tickTime,
       });
 
       this.currentTick++;

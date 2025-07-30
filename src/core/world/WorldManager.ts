@@ -120,11 +120,12 @@ export class WorldManager extends EventEmitter {
   public update(tick: number): void {
     this.tick = tick;
 
-    // Update resource regeneration
-    this.updateResourceRegeneration();
-
-    // Update environmental effects
-    this.updateEnvironmentalEffects();
+    // Only update resources and environmental effects every 10 ticks (once per second)
+    // This reduces the processing load significantly
+    if (tick % 10 === 0) {
+      this.updateResourceRegeneration();
+      this.updateEnvironmentalEffects();
+    }
 
     // Emit world update event
     this.emit('world:updated', {
@@ -139,8 +140,12 @@ export class WorldManager extends EventEmitter {
   }
 
   private updateResourceRegeneration(): void {
-    for (let x = 0; x < this.worldSize.width; x += 10) {
-      for (let y = 0; y < this.worldSize.height; y += 10) {
+    // Process only a subset of tiles each update to spread the load
+    const updateStep = 50; // Process every 50th tile instead of every 10th
+    const startX = (this.tick / 10) % updateStep; // Rotate through different starting positions
+    
+    for (let x = startX; x < this.worldSize.width; x += updateStep) {
+      for (let y = 0; y < this.worldSize.height; y += updateStep) {
         const tile = this.world[x]?.[y];
         if (!tile) continue;
 
@@ -158,9 +163,12 @@ export class WorldManager extends EventEmitter {
   }
 
   private updateEnvironmentalEffects(): void {
-    // Simple environmental changes
-    for (let x = 0; x < this.worldSize.width; x += 10) {
-      for (let y = 0; y < this.worldSize.height; y += 10) {
+    // Process only a subset of tiles each update to spread the load
+    const updateStep = 50; // Process every 50th tile instead of every 10th
+    const startX = (this.tick / 10) % updateStep; // Rotate through different starting positions
+    
+    for (let x = startX; x < this.worldSize.width; x += updateStep) {
+      for (let y = 0; y < this.worldSize.height; y += updateStep) {
         const tile = this.world[x]?.[y];
         if (!tile) continue;
 
